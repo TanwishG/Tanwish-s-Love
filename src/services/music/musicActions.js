@@ -13,6 +13,7 @@ import {
     getQueuePageSize,
 } from './musicEmbeds.js';
 import { refreshPlayerMessage } from './playerHandler.js';
+import { hasTtsSession } from '../tts/ttsService.js';
 
 const YOUTUBE_URL_PATTERN = /(?:youtube\.com|youtu\.be)/i;
 const PLAYER_CONNECT_TIMEOUT_MS = 12_000;
@@ -124,6 +125,16 @@ export function assertCanControl(member, player) {
     }
 }
 
+function assertNoTtsSession(guildId) {
+    if (hasTtsSession(guildId)) {
+        throw new TitanBotError(
+            'TTS active',
+            ErrorTypes.USER_INPUT,
+            'Text-to-speech is active in this server. Stop it with `/tts leave` before playing music.',
+        );
+    }
+}
+
 export async function ensurePlayer(client, interaction) {
     assertRiffyAvailable(client);
     assertLavalinkNodeAvailable(client);
@@ -134,6 +145,7 @@ export async function ensurePlayer(client, interaction) {
     let player = getPlayer(client, guildId);
 
     if (!player) {
+        assertNoTtsSession(guildId);
         player = client.riffy.createConnection({
             guildId,
             voiceChannel: interaction.member.voice.channel.id,
@@ -166,6 +178,7 @@ export async function joinVoiceChannel(client, interaction) {
     const guildData = getGuildMusicData(guildId);
     const channel = interaction.member.voice.channel;
     assertBotVoicePermissions(channel);
+    assertNoTtsSession(guildId);
     let player = getPlayer(client, guildId);
 
     if (player && player.voiceChannel !== channel.id) {

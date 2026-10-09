@@ -250,3 +250,6 @@ export function getLegacyVariantsForCanonical(canonicalKey) {
 
     return variants;
 }
+
+export const getTtsGuildKey = (guildId) => `guild:${guildId}:tts`;
+export const getTtsUserKey = (userId) => `user:${userId}:tts`;

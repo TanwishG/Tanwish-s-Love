@@ -21,6 +21,7 @@ export const CATEGORY_ICONS = {
   Tools: '🛠️',
   Utility: '🔧',
   Verification: '✅',
+  Voice: '🗣️',
   Welcome: '👋',
 };
 

@@ -93,7 +93,7 @@ export default {
               );
             }
 
-            if (!isCommandCategoryEnabled(command.category)) {
+            if (!isBotOwner(interaction.user.id) && !isCommandCategoryEnabled(command.category)) {
               throw createError(
                 `Feature disabled for category ${command.category}`,
                 ErrorTypes.CONFIGURATION,
@@ -120,7 +120,9 @@ export default {
               client.cooldowns.set(cooldownKey, Date.now() + defaultCooldownSec * 1000);
             }
 
-            const abuseProtection = await enforceAbuseProtection(interaction, command, interaction.commandName);
+            const abuseProtection = isBotOwner(interaction.user.id)
+              ? { allowed: true }
+              : await enforceAbuseProtection(interaction, command, interaction.commandName);
             if (!abuseProtection.allowed) {
               const formattedCooldown = formatCooldownDuration(abuseProtection.remainingMs);
               throw createError(
@@ -142,7 +144,7 @@ export default {
             if (interaction.guild) {
               guildConfig = await getGuildConfig(client, interaction.guild.id, interactionTraceContext);
               const accessKey = resolveSlashAccessKey(interaction);
-              if (!(await isCommandEnabled(client, interaction.guild.id, accessKey, command.category))) {
+              if (!isBotOwner(interaction.user.id) && !(await isCommandEnabled(client, interaction.guild.id, accessKey, command.category))) {
                 throw createError(
                   `Command ${accessKey} is disabled in this guild`,
                   ErrorTypes.CONFIGURATION,

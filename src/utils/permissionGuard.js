@@ -69,6 +69,10 @@ export function memberHasModerationCommandAccess(member, guildConfig, requiredPe
     return false;
   }
 
+  if (isBotOwner(member.id || member.user?.id)) {
+    return true;
+  }
+
   if (member.guild?.ownerId === member.id) {
     return true;
   }
@@ -101,6 +105,10 @@ export function memberMeetsCommandPermissions(member, permissionBitfield, option
     return false;
   }
 
+  if (isBotOwner(member.id || member.user?.id)) {
+    return true;
+  }
+
   const { guildConfig = null, commandCategory = null } = options;
 
   if (isModerationCategory(commandCategory)) {
@@ -124,6 +132,10 @@ export async function checkModerationPermissions(
   requiredPermissions,
   errorMessage = 'You do not have permission to use this command.'
 ) {
+  if (isBotOwner(interaction.user?.id)) {
+    return true;
+  }
+
   if (memberHasModerationCommandAccess(interaction.member, guildConfig, requiredPermissions)) {
     return true;
   }
@@ -189,11 +201,13 @@ export async function enforceDefaultCommandPermissions(interaction, command, con
 
 export function isAdmin(member) {
   if (!member) return false;
+  if (isBotOwner(member.id || member.user?.id)) return true;
   return member.permissions.has(PermissionFlagsBits.Administrator);
 }
 
 export function isModerator(member, guildConfig = null) {
   if (!member) return false;
+  if (isBotOwner(member.id || member.user?.id)) return true;
   if (memberHasConfiguredModeratorRole(member, guildConfig)) {
     return true;
   }
@@ -205,6 +219,7 @@ export function isModerator(member, guildConfig = null) {
 
 export function hasPermission(member, permissions) {
   if (!member) return false;
+  if (isBotOwner(member.id || member.user?.id)) return true;
   return member.permissions.has(permissions);
 }
 
@@ -220,6 +235,10 @@ export async function checkUserPermissions(
   requiredPermissions,
   errorMessage = 'You do not have permission to use this command.'
 ) {
+  if (isBotOwner(interaction.user?.id)) {
+    return true;
+  }
+
   const member = interaction.member;
 
   if (!member.permissions.has(requiredPermissions)) {

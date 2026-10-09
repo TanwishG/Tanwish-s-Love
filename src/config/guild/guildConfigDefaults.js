@@ -12,4 +12,6 @@ export const GUILD_CONFIG_DEFAULTS = {
     dmOnClose: true,
     disabledCommands: {},
     disabledCategories: {},
+    commandRoles: {},
+    commandUsers: {},
 };

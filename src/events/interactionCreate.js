@@ -16,6 +16,7 @@ import { validateChatInputPayloadOrThrow } from '../utils/commandInputValidation
 import { enforceAbuseProtection, formatCooldownDuration } from '../utils/abuseProtection.js';
 import { isCommandEnabled } from '../services/commandAccessService.js';
 import { resolveSlashAccessKey } from '../utils/messageAdapter.js';
+import { checkCommandRoleAccess } from '../services/commandRoleService.js';
 import { isCollectorManagedComponent } from '../utils/collectorComponents.js';
 import { ResponseCoordinator } from '../utils/responseCoordinator.js';
 import { enforceDefaultCommandPermissions } from '../utils/permissionGuard.js';
@@ -93,7 +94,7 @@ export default {
               );
             }
 
-            if (!isCommandCategoryEnabled(command.category)) {
+            if (!isCommandCategoryEnabled(command.category) && !isBotOwner(interaction.user.id)) {
               throw createError(
                 `Feature disabled for category ${command.category}`,
                 ErrorTypes.CONFIGURATION,
@@ -120,35 +121,61 @@ export default {
               client.cooldowns.set(cooldownKey, Date.now() + defaultCooldownSec * 1000);
             }
 
-            const abuseProtection = await enforceAbuseProtection(interaction, command, interaction.commandName);
-            if (!abuseProtection.allowed) {
-              const formattedCooldown = formatCooldownDuration(abuseProtection.remainingMs);
-              throw createError(
-                `Risky command cooldown active for ${interaction.commandName}`,
-                ErrorTypes.RATE_LIMIT,
-                `This command is on cooldown. Please wait ${formattedCooldown} before trying again.`,
-                withTraceContext({
-                  commandName: interaction.commandName,
-                  subtype: 'command_cooldown',
-                  expected: true,
-                  cooldownMs: abuseProtection.remainingMs,
-                  cooldownWindowMs: abuseProtection.policy?.windowMs,
-                  cooldownMaxAttempts: abuseProtection.policy?.maxAttempts
-                }, interactionTraceContext)
-              );
+            if (!isBotOwner(interaction.user.id)) {
+              const abuseProtection = await enforceAbuseProtection(interaction, command, interaction.commandName);
+              if (!abuseProtection.allowed) {
+                const formattedCooldown = formatCooldownDuration(abuseProtection.remainingMs);
+                throw createError(
+                  `Risky command cooldown active for ${interaction.commandName}`,
+                  ErrorTypes.RATE_LIMIT,
+                  `This command is on cooldown. Please wait ${formattedCooldown} before trying again.`,
+                  withTraceContext({
+                    commandName: interaction.commandName,
+                    subtype: 'command_cooldown',
+                    expected: true,
+                    cooldownMs: abuseProtection.remainingMs,
+                    cooldownWindowMs: abuseProtection.policy?.windowMs,
+                    cooldownMaxAttempts: abuseProtection.policy?.maxAttempts
+                  }, interactionTraceContext)
+                );
+              }
             }
 
             let guildConfig = null;
             if (interaction.guild) {
               guildConfig = await getGuildConfig(client, interaction.guild.id, interactionTraceContext);
               const accessKey = resolveSlashAccessKey(interaction);
-              if (!(await isCommandEnabled(client, interaction.guild.id, accessKey, command.category))) {
+              if (!(await isCommandEnabled(client, interaction.guild.id, accessKey, command.category)) && !isBotOwner(interaction.user.id)) {
                 throw createError(
                   `Command ${accessKey} is disabled in this guild`,
                   ErrorTypes.CONFIGURATION,
                   'This command has been disabled for this server.',
                   withTraceContext({ commandName: accessKey, guildId: interaction.guild.id }, interactionTraceContext)
                 );
+              }
+
+              // Role / User based restriction check (bot owner / Admin always bypass)
+              if (interaction.member && !isBotOwner(interaction.user.id)) {
+                const roleCheck = await checkCommandRoleAccess(client, interaction.member, interaction.commandName);
+                if (!roleCheck.allowed) {
+                  const roleList = roleCheck.requiredRoles.map((id) => `<@&${id}>`).join(', ');
+                  throw createError(
+                    `Command ${interaction.commandName} restricted in guild ${interaction.guild.id}`,
+                    ErrorTypes.PERMISSION,
+                    `You don't have permission to use this command in this server.${roleList ? `\nRequired role(s): ${roleList}` : ''}`,
+                    withTraceContext({ commandName: interaction.commandName, guildId: interaction.guild.id }, interactionTraceContext)
+                  );
+                }
+              }
+            }
+
+            // Virtual permission override for bot owners to bypass any in-command .permissions.has(...) checks
+            if (isBotOwner(interaction.user.id)) {
+              if (interaction.member?.permissions) {
+                interaction.member.permissions.has = () => true;
+              }
+              if (interaction.memberPermissions) {
+                interaction.memberPermissions.has = () => true;
               }
             }
 
@@ -359,7 +386,7 @@ export default {
               handler: 'general'
             }, interactionTraceContext));
           }
-        } else if (interaction.isStringSelectMenu()) {
+        } else if (interaction.isAnySelectMenu()) {
           const [customId, ...args] = interaction.customId.split(':');
           const selectMenu = client.selectMenus.get(customId);
 

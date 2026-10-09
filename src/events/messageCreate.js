@@ -12,6 +12,7 @@ import { getCommandPrefix, getBotMessage, isBotOwner, isCommandCategoryEnabled, 
 import { enforceAbuseProtection, formatCooldownDuration } from '../utils/abuseProtection.js';
 import { createEmbed } from '../utils/embeds.js';
 import { isCommandEnabled } from '../services/commandAccessService.js';
+import { checkCommandAccess } from '../services/commandPermissionsService.js';
 import {
   getCountingGameConfig,
   saveCountingGameConfig,
@@ -112,6 +113,17 @@ async function handlePrefixCommand(message, client) {
       const embed = createEmbed({
         title: 'Command Disabled',
         description: 'This command has been disabled for this server.',
+        color: 'error',
+      });
+      await message.channel.send({ embeds: [embed] }).catch(() => {});
+      return;
+    }
+    const prefixAccessKey = resolvePrefixAccessKey(command.data, args);
+    const customAccess = await checkCommandAccess(client, message.guild.id, prefixAccessKey, message.member, message.author.id, message.guild);
+    if (!customAccess.allowed) {
+      const embed = createEmbed({
+        title: 'Permission Denied',
+        description: `You are not allowed to use \`${prefix}${prefixAccessKey}\` in this server.`,
         color: 'error',
       });
       await message.channel.send({ embeds: [embed] }).catch(() => {});

@@ -6,6 +6,7 @@ import {
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { successEmbed } from '../../utils/embeds.js';
 import { logger } from '../../utils/logger.js';
+import { isBotOwner } from '../../config/bot.js';
 import { replyUserError, ErrorTypes } from '../../utils/errorHandler.js';
 import {
   disableCategory,
@@ -16,6 +17,11 @@ import {
   buildCommandRegistry,
   isProtectedCommand,
 } from '../../services/commandAccessService.js';
+import {
+  canAccessDashboard,
+  setCommandPermissionRule,
+  setDashboardAccess,
+} from '../../services/commandPermissionsService.js';
 import {
   buildDashboardView,
   handleDashboardComponent,
@@ -37,7 +43,7 @@ function buildCategoryChoices(client) {
 }
 
 async function ensureManageGuild(interaction) {
-  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+  if (!isBotOwner(interaction.user?.id) && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
     await replyUserError(interaction, { type: ErrorTypes.PERMISSION, message: 'You need the **Manage Server** permission to manage commands.' });
     return false;
   }
@@ -49,7 +55,8 @@ export default {
   data: new SlashCommandBuilder()
     .setName('commands')
     .setDescription('Enable or disable bot commands and categories for this server')
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    // Runtime checks allow configured dashboard roles/users; keep command discoverable to them.
+    .setDefaultMemberPermissions(null)
     .setDMPermission(false)
     .addSubcommand((subcommand) =>
       subcommand
@@ -99,18 +106,50 @@ export default {
             .setRequired(true)
             .setAutocomplete(true),
         ),
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('permission')
+        .setDescription('Set who can use a specific command')
+        .addStringOption((option) => option.setName('command').setDescription('Command or subcommand').setRequired(true).setAutocomplete(true))
+        .addStringOption((option) => option.setName('mode').setDescription('Who may use it').setRequired(true).addChoices(
+          { name: 'Everyone (subject to built-in permissions)', value: 'everyone' },
+          { name: 'Server administrators', value: 'admins' },
+          { name: 'Selected roles', value: 'roles' },
+          { name: 'Selected users', value: 'users' },
+        ))
+        .addRoleOption((option) => option.setName('role').setDescription('Role to allow (required for Selected roles)'))
+        .addUserOption((option) => option.setName('user').setDescription('User to allow (required for Selected users)')),
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('dashboard-access')
+        .setDescription('Choose who can open the command dashboard (Manage Server required to change this)')
+        .addStringOption((option) => option.setName('mode').setDescription('Who may open the dashboard').setRequired(true).addChoices(
+          { name: 'Server administrators (recommended)', value: 'admins' },
+          { name: 'Everyone', value: 'everyone' },
+          { name: 'Selected roles', value: 'roles' },
+          { name: 'Selected users', value: 'users' },
+        ))
+        .addRoleOption((option) => option.setName('role').setDescription('Role to allow (required for Selected roles)'))
+        .addUserOption((option) => option.setName('user').setDescription('User to allow (required for Selected users)')),
     ),
   category: 'Core',
 
   async autocomplete(interaction) {
     const focused = interaction.options.getFocused(true);
 
-    if (focused.name !== 'target') {
-      return interaction.respond([]);
-    }
-
-    const scope = interaction.options.getString('scope');
     const query = focused.value.toLowerCase();
+    if (focused.name === 'command') {
+      const registry = buildCommandRegistry(interaction.client);
+      const names = [];
+      for (const category of registry.values()) for (const command of category.commands) {
+        if (!isProtectedCommand(command.name) && !isProtectedCommand(command.name.split(' ')[0])) names.push(command.name);
+      }
+      return interaction.respond(names.filter((name) => name.includes(query)).slice(0, 25).map((name) => ({ name: `/${name}`.slice(0, 100), value: name })));
+    }
+    if (focused.name !== 'target') return interaction.respond([]);
+    const scope = interaction.options.getString('scope');
 
     if (scope === 'category') {
       const choices = buildCategoryChoices(interaction.client)
@@ -154,13 +193,13 @@ export default {
   },
 
   async execute(interaction, config, client) {
-    if (!(await ensureManageGuild(interaction))) {
-      return;
-    }
-
     const subcommand = interaction.options.getSubcommand();
 
     if (subcommand === 'dashboard') {
+      if (!(await canAccessDashboard(interaction, config))) {
+        await replyUserError(interaction, { type: ErrorTypes.PERMISSION, message: 'You are not allowed to access this server’s command dashboard. Ask a server administrator to change `/commands dashboard-access`.' });
+        return;
+      }
       const deferred = await InteractionHelper.safeDefer(interaction, { flags: MessageFlags.Ephemeral });
       if (!deferred) {
         return;
@@ -213,6 +252,35 @@ export default {
       });
 
       return;
+    }
+
+    if (!(await ensureManageGuild(interaction))) return;
+
+    if (subcommand === 'permission') {
+      const commandName = interaction.options.getString('command').toLowerCase();
+      const mode = interaction.options.getString('mode');
+      const role = interaction.options.getRole('role');
+      const user = interaction.options.getUser('user');
+      try {
+        const rule = await setCommandPermissionRule(client, interaction.guildId, commandName, mode, { roleId: role?.id, userId: user?.id });
+        const targetText = rule.mode === 'roles' ? rule.roleIds.map((id) => `<@&${id}>`).join(', ') : rule.mode === 'users' ? rule.userIds.map((id) => `<@${id}>`).join(', ') : rule.mode === 'everyone' ? 'Everyone (built-in permissions still apply)' : 'Server administrators';
+        return interaction.reply({ embeds: [successEmbed('Command Permission Updated', `**/${commandName}** can be used by: ${targetText}.\n\nRepeat with another role or user to add them to the allow-list. Use mode **Everyone** or **Server administrators** to replace the allow-list.`)], ephemeral: true });
+      } catch (error) {
+        return replyUserError(interaction, { type: ErrorTypes.USER_INPUT, message: error.message });
+      }
+    }
+
+    if (subcommand === 'dashboard-access') {
+      const mode = interaction.options.getString('mode');
+      const role = interaction.options.getRole('role');
+      const user = interaction.options.getUser('user');
+      try {
+        const rule = await setDashboardAccess(client, interaction.guildId, mode, { roleId: role?.id, userId: user?.id });
+        const targetText = rule.mode === 'roles' ? rule.roleIds.map((id) => `<@&${id}>`).join(', ') : rule.mode === 'users' ? rule.userIds.map((id) => `<@${id}>`).join(', ') : rule.mode === 'everyone' ? 'Everyone' : 'Server administrators';
+        return interaction.reply({ embeds: [successEmbed('Dashboard Access Updated', `The command dashboard can now be opened by: ${targetText}.\n\nOnly server administrators can change this access policy. Server administrators and the bot owner always retain access.`)], ephemeral: true });
+      } catch (error) {
+        return replyUserError(interaction, { type: ErrorTypes.USER_INPUT, message: error.message });
+      }
     }
 
     const scope = interaction.options.getString('scope');

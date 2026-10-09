@@ -15,6 +15,7 @@ import { createInteractionTraceContext, runWithTraceContext } from '../utils/log
 import { validateChatInputPayloadOrThrow } from '../utils/commandInputValidation.js';
 import { enforceAbuseProtection, formatCooldownDuration } from '../utils/abuseProtection.js';
 import { isCommandEnabled } from '../services/commandAccessService.js';
+import { checkCommandAccess } from '../services/commandPermissionsService.js';
 import { resolveSlashAccessKey } from '../utils/messageAdapter.js';
 import { isCollectorManagedComponent } from '../utils/collectorComponents.js';
 import { ResponseCoordinator } from '../utils/responseCoordinator.js';
@@ -150,6 +151,15 @@ export default {
                   ErrorTypes.CONFIGURATION,
                   'This command has been disabled for this server.',
                   withTraceContext({ commandName: accessKey, guildId: interaction.guild.id }, interactionTraceContext)
+                );
+              }
+              const customAccess = await checkCommandAccess(client, interaction.guild.id, accessKey, interaction.member, interaction.user.id, interaction.guild);
+              if (!customAccess.allowed) {
+                throw createError(
+                  `Custom command permission denied for ${accessKey}`,
+                  ErrorTypes.PERMISSION,
+                  `You are not allowed to use \`/${accessKey}\` in this server.`,
+                  withTraceContext({ commandName: accessKey, guildId: interaction.guild.id, subtype: 'custom_command_permission' }, interactionTraceContext)
                 );
               }
             }

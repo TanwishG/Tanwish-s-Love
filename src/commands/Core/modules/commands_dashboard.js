@@ -115,6 +115,8 @@ export function buildOverviewEmbed(snapshot, guild) {
       '• Select a category below to manage commands and subcommands',
       '• `/commands disable` — turn off a category or specific command',
       '• `/commands enable` — turn something back on',
+      '• `/commands permission` — choose who can use a command (everyone, roles, users, or admins)',
+      '• `/commands dashboard-access` — choose who can open this dashboard (Manage Server required to change this)',
     ].join('\n'),
   });
 

@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@discordjs/rest": "^2.6.1",
-    "@discordjs/voice": "^0.18.0",
+    "@discordjs/voice": "^0.19.2",
     "@sefinek/google-tts-api": "^2.1.11",
     "axios": "^1.15.2",
     "discord.js": "^14.26.4",
@@ -34,7 +34,7 @@
     "zod": "^3.25.76"
   },
   "engines": {
-    "node": ">=20.10.0"
+    "node": ">=22.12.0"
   },
   "overrides": {
     "form-data": "^4.0.6",

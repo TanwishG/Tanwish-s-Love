@@ -9,6 +9,7 @@ import {
     AudioPlayerStatus,
     NoSubscriberBehavior,
     VoiceConnectionStatus,
+    generateDependencyReport,
 } from '@discordjs/voice';
 import { logger } from '../../utils/logger.js';
 import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
@@ -88,6 +89,21 @@ export async function startTtsSession(client, voiceChannel, textChannelId) {
         selfMute: false,
     });
 
+    // Keep a short trail of what the voice connection did, so a failed join can be diagnosed from the logs.
+    const trail = [];
+    const debugLines = [];
+    connection.on('stateChange', (oldState, newState) => {
+        trail.push(newState.status);
+        if (newState.status === VoiceConnectionStatus.Disconnected && newState.reason !== undefined) {
+            trail.push(`reason=${newState.reason}${newState.closeCode ? `/code=${newState.closeCode}` : ''}`);
+        }
+    });
+    connection.on('debug', (line) => {
+        debugLines.push(line);
+        if (debugLines.length > 15) debugLines.shift();
+    });
+    connection.on('error', (error) => logger.warn(`TTS voice connection error in guild ${guildId}: ${error.message}`));
+
     const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } });
     player.on('error', (error) => logger.warn(`TTS player error in guild ${guildId}: ${error.message}`));
 
@@ -122,11 +138,18 @@ export async function startTtsSession(client, voiceChannel, textChannelId) {
     try {
         await entersState(connection, VoiceConnectionStatus.Ready, CONNECT_TIMEOUT_MS);
     } catch {
+        const finalState = connection.state.status;
+        logger.warn(
+            `TTS voice connect failed in guild ${guildId}. Final state: ${finalState}. ` +
+            `State trail: ${trail.join(' > ') || '(none)'}. Node ${process.version}.\n` +
+            `Last voice debug lines:\n${debugLines.join('\n') || '(none)'}\n` +
+            generateDependencyReport(),
+        );
         destroyTtsSession(guildId, 'connect-failed');
         throw new TitanBotError(
             'Voice connection failed',
             ErrorTypes.CONFIGURATION,
-            'I could not connect to the voice channel. Check my permissions and try again.',
+            `I could not connect to the voice channel (stuck at: \`${finalState}\`). Check my permissions and try again; if it keeps happening, the bot's log has details.`,
         );
     }
 

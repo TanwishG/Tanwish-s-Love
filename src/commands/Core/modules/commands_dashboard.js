@@ -4,6 +4,8 @@ import {
   ButtonStyle,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
+  RoleSelectMenuBuilder,
+  UserSelectMenuBuilder,
 } from 'discord.js';
 import { createEmbed } from '../../../utils/embeds.js';
 import {
@@ -15,6 +17,8 @@ import {
   resetCategoryCommands,
 } from '../../../services/commandAccessService.js';
 import { getGuildConfig } from '../../../services/config/guildConfig.js';
+import { setCommandPermissionRule, getCommandPermissionRule } from '../../../services/commandPermissionsService.js';
+import { buildCommandRegistry, isProtectedCommand } from '../../../services/commandAccessService.js';
 
 export const DASHBOARD_CATEGORY_SELECT = 'cmdaccess_category';
 export const DASHBOARD_COMMAND_SELECT = 'cmdaccess_command';
@@ -24,6 +28,11 @@ export const DASHBOARD_DISABLE_ALL = 'cmdaccess_disable_all';
 export const DASHBOARD_RESET_COMMANDS = 'cmdaccess_reset_commands';
 export const DASHBOARD_REFRESH = 'cmdaccess_refresh';
 export const DASHBOARD_HOME = 'cmdaccess_home';
+export const DASHBOARD_PERMISSIONS = 'cmdaccess_permissions';
+export const DASHBOARD_PERMISSION_COMMAND = 'cmdaccess_permission_command';
+export const DASHBOARD_PERMISSION_MODE = 'cmdaccess_permission_mode';
+export const DASHBOARD_PERMISSION_ROLE = 'cmdaccess_permission_role';
+export const DASHBOARD_PERMISSION_USER = 'cmdaccess_permission_user';
 
 const STATUS = {
   enabled: '🟢',
@@ -203,6 +212,11 @@ export function buildOverviewComponents(guildId, snapshot) {
     ),
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
+        .setCustomId(customId(DASHBOARD_PERMISSIONS, guildId))
+        .setLabel('Manage Permissions')
+        .setEmoji('🔐')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
         .setCustomId(customId(DASHBOARD_REFRESH, guildId))
         .setLabel('Refresh')
         .setEmoji('🔄')
@@ -269,9 +283,59 @@ export function buildCategoryComponents(guildId, category) {
   return rows;
 }
 
+function buildPermissionCommandView(client, guildId, selectedCommand = null, rule = null) {
+  const registry = buildCommandRegistry(client);
+  const commands = [];
+  for (const category of registry.values()) {
+    for (const command of category.commands) {
+      if (!isProtectedCommand(command.name) && !isProtectedCommand(command.name.split(' ')[0])) commands.push(command.name);
+    }
+  }
+  commands.sort((a, b) => a.localeCompare(b));
+  const commandOptions = commands.slice(0, 25).map((name) => new StringSelectMenuOptionBuilder()
+    .setLabel(`/${name}`.slice(0, 100))
+    .setValue(name)
+    .setDescription('Choose command to configure'.slice(0, 100)));
+  const rows = [];
+  if (commandOptions.length) rows.push(new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder().setCustomId(customId(DASHBOARD_PERMISSION_COMMAND, guildId))
+      .setPlaceholder(selectedCommand ? `Selected: /${selectedCommand}`.slice(0, 150) : 'Select a command...')
+      .addOptions(commandOptions)));
+  if (selectedCommand) {
+    rows.push(new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder().setCustomId(customId(DASHBOARD_PERMISSION_MODE, guildId, encodeURIComponent(selectedCommand)))
+        .setPlaceholder(`Access mode for /${selectedCommand}`.slice(0, 150))
+        .addOptions(
+          { label: 'Everyone', value: 'everyone', description: 'Anyone may use it, subject to built-in checks' },
+          { label: 'Server administrators', value: 'admins', description: 'Only administrators / Manage Server' },
+          { label: 'Selected roles', value: 'roles', description: 'Choose a role in the next step' },
+          { label: 'Selected users', value: 'users', description: 'Choose a user in the next step' },
+        )));
+    if (rule?.mode === 'roles') rows.push(new ActionRowBuilder().addComponents(
+      new RoleSelectMenuBuilder().setCustomId(customId(DASHBOARD_PERMISSION_ROLE, guildId, encodeURIComponent(selectedCommand)))
+        .setPlaceholder('Select role(s) to allow').setMinValues(1).setMaxValues(10)));
+    if (rule?.mode === 'users') rows.push(new ActionRowBuilder().addComponents(
+      new UserSelectMenuBuilder().setCustomId(customId(DASHBOARD_PERMISSION_USER, guildId, encodeURIComponent(selectedCommand)))
+        .setPlaceholder('Select user(s) to allow').setMinValues(1).setMaxValues(10)));
+  }
+  rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(customId(DASHBOARD_HOME, guildId)).setLabel('Back').setEmoji('◀️').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(customId(DASHBOARD_REFRESH, guildId)).setLabel('Refresh').setEmoji('🔄').setStyle(ButtonStyle.Secondary)));
+  const modeText = rule ? `Current mode: **${rule.mode}**` : 'No custom rule set; built-in command permissions apply.';
+  const embed = createEmbed({ title: '🔐 Command Permissions', description: selectedCommand
+    ? `Configure who can use **/${selectedCommand}**.\n${modeText}\n\nFor role/user modes, select the mode first, then choose the roles or users from the menu that appears.`
+    : 'Choose a command below to configure who can use it. This interactive page replaces the typed `/commands permission` workflow.', color: 'info', footer: 'Bot owner and server owner retain access; protected commands cannot be configured.' });
+  return { embed, components: rows, selectedCommand };
+}
+
 export async function buildDashboardView(client, guildId, guild, view = 'overview', categoryKey = null) {
   const config = await getGuildConfig(client, guildId);
   const snapshot = getCommandAccessSnapshot(client, config);
+
+  if (view === 'permissions') {
+    const permissionState = categoryKey ? await getCommandPermissionRule(client, guildId, categoryKey) : null;
+    return buildPermissionCommandView(client, guildId, categoryKey, permissionState?.rule || null);
+  }
 
   if (view === 'category' && categoryKey) {
     const category = snapshot.categories.find((entry) => entry.key === categoryKey);
@@ -306,6 +370,43 @@ export async function handleDashboardComponent(interaction, client) {
       content: 'This dashboard belongs to another server.',
       ephemeral: true,
     });
+  }
+
+  if (action === DASHBOARD_PERMISSIONS) {
+    const view = await buildDashboardView(client, guildId, interaction.guild, 'permissions');
+    return interaction.update({ embeds: [view.embed], components: view.components });
+  }
+
+  if (action === DASHBOARD_PERMISSION_COMMAND) {
+    const commandName = interaction.values[0];
+    const permissionState = await getCommandPermissionRule(client, guildId, commandName);
+    const view = buildPermissionCommandView(client, guildId, commandName, permissionState.rule);
+    return interaction.update({ embeds: [view.embed], components: view.components });
+  }
+
+  if (action === DASHBOARD_PERMISSION_MODE) {
+    const commandName = decodeURIComponent(suffix || '');
+    const mode = interaction.values[0];
+    if (mode === 'roles' || mode === 'users') {
+      const permissionState = await getCommandPermissionRule(client, guildId, commandName);
+      const view = buildPermissionCommandView(client, guildId, commandName, { ...(permissionState.rule || {}), mode });
+      return interaction.update({ embeds: [view.embed], components: view.components });
+    }
+    const rule = await setCommandPermissionRule(client, guildId, commandName, mode);
+    const view = buildPermissionCommandView(client, guildId, commandName, rule);
+    return interaction.update({ embeds: [view.embed], components: view.components });
+  }
+
+  if (action === DASHBOARD_PERMISSION_ROLE || action === DASHBOARD_PERMISSION_USER) {
+    const commandName = decodeURIComponent(suffix || '');
+    const mode = action === DASHBOARD_PERMISSION_ROLE ? 'roles' : 'users';
+    let rule = null;
+    for (const targetId of interaction.values) {
+      rule = await setCommandPermissionRule(client, guildId, commandName, mode,
+        mode === 'roles' ? { roleId: targetId } : { userId: targetId });
+    }
+    const view = buildPermissionCommandView(client, guildId, commandName, rule);
+    return interaction.update({ embeds: [view.embed], components: view.components });
   }
 
   if (action === DASHBOARD_COMMAND_SELECT) {

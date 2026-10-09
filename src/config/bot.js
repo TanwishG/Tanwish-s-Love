@@ -474,7 +474,6 @@ export const botConfig = {
     community: true,
     fun: true,
     music: true,
-    youtube: true,
   },
 };
 
@@ -550,7 +549,6 @@ const COMMAND_CATEGORY_FEATURE_MAP = {
   voice: "voice",
   verification: "verification",
   welcome: "welcome",
-  youtube: "youtube",
 };
 
 function normalizeCategoryKey(category) {
@@ -561,34 +559,10 @@ export function getCommandPrefix() {
   return botConfig.commands?.prefix ?? "!";
 }
 
-const dynamicBotOwners = new Set();
-
-export function addBotOwner(userId) {
-  if (userId) {
-    dynamicBotOwners.add(String(userId).trim());
-  }
-}
-
-export function removeBotOwner(userId) {
-  if (userId) {
-    dynamicBotOwners.delete(String(userId).trim());
-  }
-}
-
 export function getBotOwners() {
-  const envOwners = [
-    ...(process.env.OWNER_IDS?.split(',') || []),
-    process.env.OWNER_ID,
-    process.env.BOT_OWNER_ID,
-  ]
-    .map((id) => String(id || '').trim())
-    .filter(Boolean);
-
-  const configOwners = (botConfig.commands?.owners ?? [])
+  return (botConfig.commands?.owners ?? [])
     .map((id) => String(id).trim())
     .filter(Boolean);
-
-  return Array.from(new Set([...envOwners, ...configOwners, ...dynamicBotOwners]));
 }
 
 export function isBotOwner(userId) {
@@ -596,7 +570,7 @@ export function isBotOwner(userId) {
     return false;
   }
 
-  return getBotOwners().includes(String(userId).trim());
+  return getBotOwners().includes(String(userId));
 }
 
 export function isMaintenanceMode() {

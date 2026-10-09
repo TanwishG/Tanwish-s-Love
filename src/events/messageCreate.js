@@ -12,7 +12,6 @@ import { getCommandPrefix, getBotMessage, isBotOwner, isCommandCategoryEnabled, 
 import { enforceAbuseProtection, formatCooldownDuration } from '../utils/abuseProtection.js';
 import { createEmbed } from '../utils/embeds.js';
 import { isCommandEnabled } from '../services/commandAccessService.js';
-import { checkCommandRoleAccess } from '../services/commandRoleService.js';
 import {
   getCountingGameConfig,
   saveCountingGameConfig,
@@ -85,7 +84,7 @@ async function handlePrefixCommand(message, client) {
       return;
     }
 
-    if (!isCommandCategoryEnabled(command.category) && !isBotOwner(message.author.id)) {
+    if (!isCommandCategoryEnabled(command.category)) {
       await message.channel.send({
         embeds: [createEmbed({
           title: 'Feature Disabled',
@@ -97,7 +96,7 @@ async function handlePrefixCommand(message, client) {
     }
 
     const restriction = getPrefixRestriction(command, args, resolveSubcommandAlias);
-    if ((!supportsPrefixExecution(command) || restriction.blocked) && !isBotOwner(message.author.id)) {
+    if (!supportsPrefixExecution(command) || restriction.blocked) {
       if (restriction.blocked && restriction.reason) {
         const embed = createEmbed({
           title: 'Slash Command Only',
@@ -109,7 +108,7 @@ async function handlePrefixCommand(message, client) {
       return;
     }
 
-    if (!(await isCommandEnabled(client, message.guild.id, resolvePrefixAccessKey(command.data, args), command.category)) && !isBotOwner(message.author.id)) {
+    if (!(await isCommandEnabled(client, message.guild.id, resolvePrefixAccessKey(command.data, args), command.category))) {
       const embed = createEmbed({
         title: 'Command Disabled',
         description: 'This command has been disabled for this server.',
@@ -119,47 +118,24 @@ async function handlePrefixCommand(message, client) {
       return;
     }
 
-    if (message.member && !isBotOwner(message.author.id)) {
-      const roleCheck = await checkCommandRoleAccess(client, message.member, resolvedCommandName);
-      if (!roleCheck.allowed) {
-        const roleList = roleCheck.requiredRoles.map((id) => `<@&${id}>`).join(', ');
-        const embed = createEmbed({
-          title: 'Access Restricted',
-          description: `You don't have permission to use this command in this server.${roleList ? `\nRequired role(s): ${roleList}` : ''}`,
-          color: 'error',
-        });
-        await message.channel.send({ embeds: [embed] }).catch(() => {});
-        return;
-      }
-    }
-
-    if (!isBotOwner(message.author.id)) {
-      const mockInteractionForProtection = {
-        guildId: message.guild.id,
-        user: message.author,
-      };
-      const abuseProtection = await enforceAbuseProtection(
-        mockInteractionForProtection,
-        command,
-        resolvedCommandName,
-      );
-      if (!abuseProtection.allowed) {
-        const formattedCooldown = formatCooldownDuration(abuseProtection.remainingMs);
-        const embed = createEmbed({
-          title: 'Command Cooldown',
-          description: `This command is on cooldown. Please wait ${formattedCooldown} before trying again.`,
-          color: 'error',
-        });
-        await message.channel.send({ embeds: [embed] }).catch(() => {});
-        return;
-      }
-    }
-
-    // Virtual permission override for bot owners
-    if (isBotOwner(message.author.id)) {
-      if (message.member?.permissions) {
-        message.member.permissions.has = () => true;
-      }
+    const mockInteractionForProtection = {
+      guildId: message.guild.id,
+      user: message.author,
+    };
+    const abuseProtection = await enforceAbuseProtection(
+      mockInteractionForProtection,
+      command,
+      resolvedCommandName,
+    );
+    if (!abuseProtection.allowed) {
+      const formattedCooldown = formatCooldownDuration(abuseProtection.remainingMs);
+      const embed = createEmbed({
+        title: 'Command Cooldown',
+        description: `This command is on cooldown. Please wait ${formattedCooldown} before trying again.`,
+        color: 'error',
+      });
+      await message.channel.send({ embeds: [embed] }).catch(() => {});
+      return;
     }
 
     logger.info(`Executing prefix command: ${prefix}${commandName} (resolved to ${resolvedCommandName}) by ${message.author.tag}`);

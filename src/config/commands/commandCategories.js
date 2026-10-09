@@ -23,7 +23,6 @@ export const CATEGORY_ICONS = {
   Verification: '✅',
   Voice: '🗣️',
   Welcome: '👋',
-  YouTube: '📺',
 };
 
 /** Commands that always stay available so admins can recover access. */

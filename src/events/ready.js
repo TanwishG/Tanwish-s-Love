@@ -5,7 +5,6 @@ import { reconcileReactionRoleMessages } from "../services/reactionRoleService.j
 import { reconcileTicketPanels, reconcileVerificationPanels, reconcileReactionRolePanelHealth } from "../services/panelHealthService.js";
 import { reconcileLevelRoles } from "../services/leveling/levelRoleSyncService.js";
 import { initRiffyAfterReady } from "../services/music/riffySetup.js";
-import { startYouTubeNotifier } from "../services/youtubeNotifierService.js";
 
 export default {
   name: Events.ClientReady,
@@ -22,9 +21,6 @@ export default {
       if (client.config?.features?.music) {
         initRiffyAfterReady(client);
       }
-
-      // Start YouTube upload notifier
-      startYouTubeNotifier(client);
 
       const reconciliationSummary = await reconcileReactionRoleMessages(client);
       startupLog(

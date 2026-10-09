@@ -2,13 +2,11 @@ import {
   SlashCommandBuilder,
   PermissionFlagsBits,
   MessageFlags,
-  EmbedBuilder,
 } from 'discord.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { successEmbed } from '../../utils/embeds.js';
 import { logger } from '../../utils/logger.js';
 import { replyUserError, ErrorTypes } from '../../utils/errorHandler.js';
-import { isBotOwner } from '../../config/bot.js';
 import {
   disableCategory,
   enableCategory,
@@ -18,12 +16,6 @@ import {
   buildCommandRegistry,
   isProtectedCommand,
 } from '../../services/commandAccessService.js';
-import {
-  getCommandRestrictions,
-  setCommandRoles,
-  setCommandUsers,
-  clearCommandRestrictions,
-} from '../../services/commandRoleService.js';
 import {
   buildDashboardView,
   handleDashboardComponent,
@@ -45,15 +37,8 @@ function buildCategoryChoices(client) {
 }
 
 async function ensureManageGuild(interaction) {
-  if (isBotOwner(interaction.user?.id)) {
-    return true;
-  }
-
   if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-    await replyUserError(interaction, {
-      type: ErrorTypes.PERMISSION,
-      message: 'You need the **Manage Server** permission to manage commands.',
-    });
+    await replyUserError(interaction, { type: ErrorTypes.PERMISSION, message: 'You need the **Manage Server** permission to manage commands.' });
     return false;
   }
 
@@ -63,66 +48,18 @@ async function ensureManageGuild(interaction) {
 export default {
   data: new SlashCommandBuilder()
     .setName('commands')
-    .setDescription('Manage bot commands, permissions, and who can use what')
+    .setDescription('Enable or disable bot commands and categories for this server')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .setDMPermission(false)
     .addSubcommand((subcommand) =>
       subcommand
         .setName('dashboard')
-        .setDescription('Open the interactive command permissions and access dashboard'),
-    )
-    .addSubcommand((subcommand) =>
-      subcommand
-        .setName('permissions')
-        .setDescription('View who can use a specific command')
-        .addStringOption((option) =>
-          option
-            .setName('command')
-            .setDescription('Command name')
-            .setRequired(true)
-            .setAutocomplete(true),
-        ),
-    )
-    .addSubcommand((subcommand) =>
-      subcommand
-        .setName('restrict')
-        .setDescription('Restrict who can use a command to specific role(s) or user(s)')
-        .addStringOption((option) =>
-          option
-            .setName('command')
-            .setDescription('Command name to restrict')
-            .setRequired(true)
-            .setAutocomplete(true),
-        )
-        .addRoleOption((option) =>
-          option
-            .setName('role')
-            .setDescription('Role that may use this command')
-            .setRequired(false),
-        )
-        .addUserOption((option) =>
-          option
-            .setName('user')
-            .setDescription('Specific user who may use this command')
-            .setRequired(false),
-        ),
-    )
-    .addSubcommand((subcommand) =>
-      subcommand
-        .setName('unrestrict')
-        .setDescription('Reset a command so anyone with base permissions can use it')
-        .addStringOption((option) =>
-          option
-            .setName('command')
-            .setDescription('Command name to reset')
-            .setRequired(true)
-            .setAutocomplete(true),
-        ),
+        .setDescription('Open the interactive command access dashboard'),
     )
     .addSubcommand((subcommand) =>
       subcommand
         .setName('disable')
-        .setDescription('Disable a command or entire category in this server')
+        .setDescription('Disable a command or entire category')
         .addStringOption((option) =>
           option
             .setName('scope')
@@ -144,7 +81,7 @@ export default {
     .addSubcommand((subcommand) =>
       subcommand
         .setName('enable')
-        .setDescription('Enable a command or entire category in this server')
+        .setDescription('Enable a command or entire category')
         .addStringOption((option) =>
           option
             .setName('scope')
@@ -167,31 +104,13 @@ export default {
 
   async autocomplete(interaction) {
     const focused = interaction.options.getFocused(true);
-    const query = focused.value.toLowerCase();
-
-    // Autocomplete for command option in restrict / unrestrict / permissions
-    if (focused.name === 'command') {
-      const registry = buildCommandRegistry(interaction.client);
-      const allCommands = [];
-      for (const category of registry.values()) {
-        for (const command of category.commands) {
-          if (!isProtectedCommand(command.name)) {
-            allCommands.push(command.name);
-          }
-        }
-      }
-      const choices = allCommands
-        .filter((name) => name.toLowerCase().includes(query))
-        .slice(0, 25)
-        .map((name) => ({ name: `/${name}`, value: name }));
-      return interaction.respond(choices);
-    }
 
     if (focused.name !== 'target') {
       return interaction.respond([]);
     }
 
     const scope = interaction.options.getString('scope');
+    const query = focused.value.toLowerCase();
 
     if (scope === 'category') {
       const choices = buildCategoryChoices(interaction.client)
@@ -203,18 +122,22 @@ export default {
     // For command scope, get all commands including subcommands
     const registry = buildCommandRegistry(interaction.client);
     const allCommands = [];
-
+    
+    // Check if the query matches a category name - if so, show commands from that category
     const matchedCategory = resolveCategoryChoice(interaction.client, query);
-
+    
     if (matchedCategory) {
+      // Show commands from the matched category
       for (const command of matchedCategory.commands) {
         if (!isProtectedCommand(command.name)) {
           allCommands.push(command.name);
         }
       }
     } else {
+      // Show all commands
       for (const category of registry.values()) {
         for (const command of category.commands) {
+          // Include both base commands and subcommands
           if (!isProtectedCommand(command.name)) {
             allCommands.push(command.name);
           }
@@ -223,7 +146,7 @@ export default {
     }
 
     const choices = allCommands
-      .filter((name) => name.toLowerCase().includes(query))
+      .filter((name) => name.includes(query))
       .slice(0, 25)
       .map((name) => ({ name: `/${name}`, value: name }));
 
@@ -237,7 +160,6 @@ export default {
 
     const subcommand = interaction.options.getSubcommand();
 
-    // 1. Dashboard Subcommand
     if (subcommand === 'dashboard') {
       const deferred = await InteractionHelper.safeDefer(interaction, { flags: MessageFlags.Ephemeral });
       if (!deferred) {
@@ -293,87 +215,6 @@ export default {
       return;
     }
 
-    // 2. Permissions Subcommand — View who can use a command
-    if (subcommand === 'permissions') {
-      const commandName = interaction.options.getString('command').toLowerCase().trim();
-      const restrictions = await getCommandRestrictions(client, interaction.guildId);
-
-      const roles = restrictions.commandRoles?.[commandName] || [];
-      const users = restrictions.commandUsers?.[commandName] || [];
-
-      const rolesText = roles.length > 0 ? roles.map((id) => `<@&${id}>`).join(', ') : '`Unrestricted` (all roles)';
-      const usersText = users.length > 0 ? users.map((id) => `<@${id}>`).join(', ') : '`Unrestricted` (all users)';
-
-      const embed = new EmbedBuilder()
-        .setTitle(`🔐 Permissions for /${commandName}`)
-        .setDescription(`Access settings for **/${commandName}** in **${interaction.guild.name}**.`)
-        .setColor(roles.length || users.length ? 0xFEE75C : 0x57F287)
-        .addFields(
-          { name: 'Allowed Roles', value: rolesText, inline: false },
-          { name: 'Allowed Users', value: usersText, inline: false },
-        )
-        .setFooter({ text: 'Bot owners, server owner, and Admins can always use any command.' });
-
-      return interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
-    }
-
-    // 3. Restrict Subcommand — Set allowed role or user for a command
-    if (subcommand === 'restrict') {
-      const commandName = interaction.options.getString('command').toLowerCase().trim();
-      const role = interaction.options.getRole('role');
-      const user = interaction.options.getUser('user');
-
-      if (!role && !user) {
-        return replyUserError(interaction, {
-          type: ErrorTypes.VALIDATION,
-          message: 'Please provide at least a `role` or a `user` to restrict the command to.',
-        });
-      }
-
-      const restrictions = await getCommandRestrictions(client, interaction.guildId);
-      const existingRoles = restrictions.commandRoles?.[commandName] || [];
-      const existingUsers = restrictions.commandUsers?.[commandName] || [];
-
-      if (role && !existingRoles.includes(role.id)) {
-        existingRoles.push(role.id);
-        await setCommandRoles(client, interaction.guildId, commandName, existingRoles);
-      }
-
-      if (user && !existingUsers.includes(user.id)) {
-        existingUsers.push(user.id);
-        await setCommandUsers(client, interaction.guildId, commandName, existingUsers);
-      }
-
-      const updatedRoles = (role ? `<@&${role.id}>` : '') + (role && user ? ' and ' : '') + (user ? `<@${user.id}>` : '');
-
-      return interaction.reply({
-        embeds: [
-          successEmbed(
-            'Command Restricted',
-            `\`/${commandName}\` is now restricted! Added ${updatedRoles} to allowed access.\n\nUse \`/commands permissions ${commandName}\` to see current permissions.`,
-          ),
-        ],
-        flags: MessageFlags.Ephemeral,
-      });
-    }
-
-    // 4. Unrestrict Subcommand — Clear restrictions
-    if (subcommand === 'unrestrict') {
-      const commandName = interaction.options.getString('command').toLowerCase().trim();
-      await clearCommandRestrictions(client, interaction.guildId, commandName);
-
-      return interaction.reply({
-        embeds: [
-          successEmbed(
-            'Restrictions Cleared',
-            `All role and user restrictions for \`/${commandName}\` have been cleared. Anyone with base permissions can use it.`,
-          ),
-        ],
-        flags: MessageFlags.Ephemeral,
-      });
-    }
-
-    // 5. Enable / Disable Subcommand
     const scope = interaction.options.getString('scope');
     const target = interaction.options.getString('target');
     const isDisable = subcommand === 'disable';
@@ -386,10 +227,7 @@ export default {
     if (scope === 'category') {
       const category = resolveCategoryChoice(client, target);
       if (!category) {
-        return await replyUserError(interaction, {
-          type: ErrorTypes.UNKNOWN,
-          message: `No category matched \`${target}\`. Use \`/commands dashboard\` to browse categories.`,
-        });
+        return await replyUserError(interaction, { type: ErrorTypes.UNKNOWN, message: `No category matched \`${target}\`. Use \`/commands dashboard\` to browse categories.` });
       }
 
       if (isDisable) {
@@ -406,12 +244,7 @@ export default {
 
       await enableCategory(client, interaction.guildId, category.key);
       return InteractionHelper.safeEditReply(interaction, {
-        embeds: [
-          successEmbed(
-            'Category Enabled',
-            `**${category.displayName}** commands are now enabled (except individually disabled commands).`,
-          ),
-        ],
+        embeds: [successEmbed('Category Enabled', `**${category.displayName}** commands are now enabled (except individually disabled commands).`)],
       });
     }
 

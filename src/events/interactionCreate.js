@@ -153,7 +153,7 @@ export default {
                   withTraceContext({ commandName: accessKey, guildId: interaction.guild.id }, interactionTraceContext)
                 );
               }
-              const customAccess = await checkCommandAccess(client, interaction.guild.id, accessKey, interaction.member, interaction.user.id, interaction.guild);
+              const customAccess = await checkCommandAccess(client, interaction.guild.id, accessKey, interaction.member, interaction.user.id, interaction.guild, command.category);
               if (!customAccess.allowed) {
                 throw createError(
                   `Custom command permission denied for ${accessKey}`,
@@ -414,6 +414,7 @@ export default {
             interaction.customId.startsWith('app_review_')
             || interaction.customId.startsWith('jtc_')
             || interaction.customId.startsWith('config_wizard_modal:')
+            || interaction.customId.startsWith('cmdaccess_modal_')
             || interaction.customId.startsWith('log_dash_channel_modal:')
             || interaction.customId.startsWith('log_dash_filter_modal:')
           ) {

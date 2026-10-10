@@ -45,3 +45,15 @@ If no `POSTGRES_URL`, `DATABASE_URL` or `POSTGRES_HOST` is set, the bot automati
 - It is excluded from Git on purpose, so uploads from GitHub never replace it.
 - Optional environment variables: `DATA_DIR` (change the folder) and `DATABASE_MODE=memory` (turn saving off).
 - A copy of the previous save is kept as `bot-data.json.bak`.
+
+## Permissions screen (category cards)
+
+`/commands dashboard` -> **Permissions** shows one card per command category with a badge for the current mode and a dropdown: Everyone, Server Administrators, Selected Roles, Selected Users. Choosing roles or users opens a picker at the top. A rule on a single command (set from a category's "Who can use these commands" screen) overrides its category's rule.
+
+## Custom replies
+
+`/commands dashboard` -> **Custom replies** -> **Add reply**. Example: name `invite`, reply `Join us: https://discord.gg/...` makes `!invite` answer with that message. Placeholders: `{user}` `{username}` `{server}` `{channel}`. Replies never ping @everyone, @here or roles, and built-in command names cannot be reused.
+
+## !perms
+
+Type `!perms` (Manage Server required) to see the permissions the bot needs, which ones it has or is missing in this server, and an invite link containing exactly those permissions, so Administrator is not required.

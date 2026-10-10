@@ -18,6 +18,8 @@ import {
   resetCategoryCommands,
 } from '../../../services/commandAccessService.js';
 import { getGuildConfig } from '../../../services/config/guildConfig.js';
+import { PERMISSIONS_OPEN, openPermissionsView } from './commands_permissions_view.js';
+import { CC_OPEN, CC_ADD, CC_REMOVE, handleCustomReplyComponent } from './commands_customreplies.js';
 import {
   canManageAccessPolicy,
   getCommandPermissionRule,
@@ -145,7 +147,10 @@ export function buildOverviewEmbed(snapshot, guild) {
       '• `/commands disable` — turn off a category or specific command',
       '• `/commands enable` — turn something back on',
       '• Open a category, then press **Who can use these commands** to pick roles/users with dropdowns',
-      '• **Who can open this dashboard** (button below) controls who may use this screen',
+      '• **🔑 Permissions** shows every category and who can use it, with a dropdown for each',
+      '• **💬 Custom replies** makes the bot answer a command (like `!invite`) with your message',
+      '• **🔐 Who can open this** controls who may use this dashboard',
+      '• `!perms` lists the permissions the bot needs, so it does not need Administrator',
     ].join('\n'),
   });
 
@@ -238,8 +243,18 @@ export function buildOverviewComponents(guildId, snapshot) {
         .setEmoji('🔄')
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
+        .setCustomId(customId(PERMISSIONS_OPEN, guildId))
+        .setLabel('Permissions')
+        .setEmoji('🔑')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(customId(CC_OPEN, guildId))
+        .setLabel('Custom replies')
+        .setEmoji('💬')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
         .setCustomId(customId(DASHBOARD_ACCESS_OPEN, guildId))
-        .setLabel('Who can open this dashboard')
+        .setLabel('Who can open this')
         .setEmoji('🔐')
         .setStyle(ButtonStyle.Secondary),
     ),
@@ -549,6 +564,14 @@ export async function handleDashboardComponent(interaction, client) {
       content: 'This dashboard belongs to another server.',
       ephemeral: true,
     });
+  }
+
+  if (action === PERMISSIONS_OPEN) {
+    return openPermissionsView(interaction, client);
+  }
+
+  if (action === CC_OPEN || action === CC_ADD || action === CC_REMOVE) {
+    return handleCustomReplyComponent(interaction, client, action, guildId, customId(DASHBOARD_HOME, guildId));
   }
 
   if (action.startsWith('cmdaccess_perm_') || action === DASHBOARD_ACCESS_OPEN) {

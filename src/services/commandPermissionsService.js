@@ -2,6 +2,7 @@ import { PermissionFlagsBits } from 'discord.js';
 import { isBotOwner } from '../config/bot.js';
 import { getGuildConfig, updateGuildConfig } from './config/guildConfig.js';
 import { isProtectedCommand } from './commandAccessService.js';
+import { normalizeCategoryKey } from '../config/commands/commandCategories.js';
 
 // 'custom' = specific roles AND/OR users together (used by the dashboard); 'roles'/'users' come from the typed commands.
 const VALID_MODES = new Set(['everyone', 'admins', 'roles', 'users', 'custom']);
@@ -129,6 +130,25 @@ export async function setCommandPermissionAccess(client, guildId, commandName, {
   return commandPermissions[key] || null;
 }
 
+export async function getCategoryPermissionRule(client, guildId, categoryKey) {
+  const config = await getGuildConfig(client, guildId);
+  const key = normalizeCategoryKey(categoryKey);
+  const rules = config?.categoryPermissions && typeof config.categoryPermissions === 'object' ? config.categoryPermissions : {};
+  return rules[key] ? normalizeAccessRule(rules[key], 'admins') : null;
+}
+
+/** Set who may use every command in a category. mode 'everyone' removes the rule. */
+export async function setCategoryPermissionAccess(client, guildId, categoryKey, { mode, roleIds = [], userIds = [] }) {
+  const key = normalizeCategoryKey(categoryKey);
+  if (!key) throw new Error('Choose a category first.');
+  const config = await getGuildConfig(client, guildId);
+  const categoryPermissions = { ...(config.categoryPermissions || {}) };
+  if (mode === 'everyone') delete categoryPermissions[key];
+  else categoryPermissions[key] = buildRule(mode, roleIds, userIds);
+  await updateGuildConfig(client, guildId, { categoryPermissions });
+  return categoryPermissions[key] || null;
+}
+
 export async function setDashboardAccessPolicy(client, guildId, { mode, roleIds = [], userIds = [] }) {
   const next = buildRule(mode, roleIds, userIds);
   await updateGuildConfig(client, guildId, { dashboardAccess: next });
@@ -177,10 +197,21 @@ export function canUseCommandByRule(member, userId, guild, rule) {
   return true;
 }
 
-export async function checkCommandAccess(client, guildId, commandName, member, userId, guild) {
+export async function checkCommandAccess(client, guildId, commandName, member, userId, guild, category = null) {
   const key = String(commandName || '').trim().toLowerCase();
   if (isProtectedCommand(key.split(' ')[0])) return { allowed: true, rule: null };
-  const { rule } = await getCommandPermissionRule(client, guildId, key);
-  if (!rule) return { allowed: true, rule: null };
-  return { allowed: canUseCommandByRule(member, userId, guild, rule), rule };
+
+  // A rule on the command itself wins; otherwise the category's rule applies.
+  const { config, rule } = await getCommandPermissionRule(client, guildId, key);
+  if (rule) return { allowed: canUseCommandByRule(member, userId, guild, rule), rule };
+
+  if (category) {
+    const categoryKey = normalizeCategoryKey(category);
+    const categoryRule = config?.categoryPermissions?.[categoryKey];
+    if (categoryRule) {
+      const normalized = normalizeAccessRule(categoryRule, 'admins');
+      return { allowed: canUseCommandByRule(member, userId, guild, normalized), rule: normalized };
+    }
+  }
+  return { allowed: true, rule: null };
 }

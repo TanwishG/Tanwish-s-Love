@@ -119,7 +119,7 @@ async function handlePrefixCommand(message, client) {
       return;
     }
     const prefixAccessKey = resolvePrefixAccessKey(command.data, args);
-    const customAccess = await checkCommandAccess(client, message.guild.id, prefixAccessKey, message.member, message.author.id, message.guild);
+    const customAccess = await checkCommandAccess(client, message.guild.id, prefixAccessKey, message.member, message.author.id, message.guild, command.category);
     if (!customAccess.allowed) {
       const embed = createEmbed({
         title: 'Permission Denied',

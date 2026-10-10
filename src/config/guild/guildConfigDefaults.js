@@ -13,5 +13,6 @@ export const GUILD_CONFIG_DEFAULTS = {
     disabledCommands: {},
     disabledCategories: {},
     commandPermissions: {},
+    categoryPermissions: {},
     dashboardAccess: { mode: "admins", roleIds: [], userIds: [] },
 };

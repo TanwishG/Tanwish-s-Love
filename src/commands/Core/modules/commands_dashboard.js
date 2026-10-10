@@ -4,6 +4,9 @@ import {
   ButtonStyle,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
+  RoleSelectMenuBuilder,
+  UserSelectMenuBuilder,
+  MessageFlags,
 } from 'discord.js';
 import { createEmbed } from '../../../utils/embeds.js';
 import {
@@ -15,6 +18,13 @@ import {
   resetCategoryCommands,
 } from '../../../services/commandAccessService.js';
 import { getGuildConfig } from '../../../services/config/guildConfig.js';
+import {
+  canManageAccessPolicy,
+  getCommandPermissionRule,
+  getDashboardAccessRule,
+  setCommandPermissionAccess,
+  setDashboardAccessPolicy,
+} from '../../../services/commandPermissionsService.js';
 
 export const DASHBOARD_CATEGORY_SELECT = 'cmdaccess_category';
 export const DASHBOARD_COMMAND_SELECT = 'cmdaccess_command';
@@ -24,6 +34,25 @@ export const DASHBOARD_DISABLE_ALL = 'cmdaccess_disable_all';
 export const DASHBOARD_RESET_COMMANDS = 'cmdaccess_reset_commands';
 export const DASHBOARD_REFRESH = 'cmdaccess_refresh';
 export const DASHBOARD_HOME = 'cmdaccess_home';
+export const DASHBOARD_PERM_OPEN = 'cmdaccess_perm_open';
+export const DASHBOARD_PERM_COMMAND = 'cmdaccess_perm_cmd';
+export const DASHBOARD_PERM_MODE = 'cmdaccess_perm_mode';
+export const DASHBOARD_PERM_ROLES = 'cmdaccess_perm_roles';
+export const DASHBOARD_PERM_USERS = 'cmdaccess_perm_users';
+export const DASHBOARD_PERM_RESET = 'cmdaccess_perm_reset';
+export const DASHBOARD_PERM_BACK = 'cmdaccess_perm_back';
+export const DASHBOARD_ACCESS_OPEN = 'cmdaccess_dash_open';
+
+// Stands in for a command name when the editor is changing "who can open this dashboard".
+const DASHBOARD_TARGET = '@dashboard';
+
+const MODE_LABELS = {
+  everyone: '🌐 Everyone',
+  admins: '🛡️ Server administrators only',
+  custom: '👥 Specific roles / users',
+  roles: '👥 Specific roles',
+  users: '👥 Specific users',
+};
 
 const STATUS = {
   enabled: '🟢',
@@ -115,8 +144,8 @@ export function buildOverviewEmbed(snapshot, guild) {
       '• Select a category below to manage commands and subcommands',
       '• `/commands disable` — turn off a category or specific command',
       '• `/commands enable` — turn something back on',
-      '• `/commands permission` — choose who can use a command (everyone, roles, users, or admins)',
-      '• `/commands dashboard-access` — choose who can open this dashboard (Manage Server required to change this)',
+      '• Open a category, then press **Who can use these commands** to pick roles/users with dropdowns',
+      '• **Who can open this dashboard** (button below) controls who may use this screen',
     ].join('\n'),
   });
 
@@ -172,6 +201,7 @@ export function buildCategoryEmbed(category, guild) {
       '• Use the dropdown to toggle individual commands or subcommands',
       '• **Disable All** turns off the whole category',
       '• **Clear Overrides** re-enables individually disabled entries',
+      '• **Who can use these commands** picks the roles/users allowed to run each command',
     ].join('\n'),
   });
 
@@ -206,6 +236,11 @@ export function buildOverviewComponents(guildId, snapshot) {
         .setCustomId(customId(DASHBOARD_REFRESH, guildId))
         .setLabel('Refresh')
         .setEmoji('🔄')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(customId(DASHBOARD_ACCESS_OPEN, guildId))
+        .setLabel('Who can open this dashboard')
+        .setEmoji('🔐')
         .setStyle(ButtonStyle.Secondary),
     ),
   ];
@@ -255,6 +290,16 @@ export function buildCategoryComponents(guildId, category) {
     ),
   ];
 
+  rows.push(
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(customId(DASHBOARD_PERM_OPEN, guildId, category.key))
+        .setLabel('Who can use these commands')
+        .setEmoji('👥')
+        .setStyle(ButtonStyle.Primary),
+    ),
+  );
+
   if (commandOptions.length > 0) {
     rows.unshift(
       new ActionRowBuilder().addComponents(
@@ -267,6 +312,204 @@ export function buildCategoryComponents(guildId, category) {
   }
 
   return rows;
+}
+
+function describeRule(rule) {
+  const lines = [];
+  if (rule.roleIds?.length) lines.push(`**Roles:** ${rule.roleIds.map((id) => `<@&${id}>`).join(' ')}`);
+  if (rule.userIds?.length) lines.push(`**Users:** ${rule.userIds.map((id) => `<@${id}>`).join(' ')}`);
+  return lines.join('\n');
+}
+
+/**
+ * The "who can use this" screen.
+ * commandName === DASHBOARD_TARGET edits who may open the dashboard instead of a command.
+ */
+export async function buildAccessEditorView(client, guildId, guild, categoryKey, commandName) {
+  const config = await getGuildConfig(client, guildId);
+  const snapshot = getCommandAccessSnapshot(client, config);
+  const isDashboard = commandName === DASHBOARD_TARGET;
+  const category = isDashboard ? null : snapshot.categories.find((entry) => entry.key === categoryKey);
+
+  if (!isDashboard && !category) {
+    return { embed: buildOverviewEmbed(snapshot, guild), components: buildOverviewComponents(guildId, snapshot) };
+  }
+
+  const selectable = isDashboard ? [] : category.commands.filter((command) => !command.protected);
+  let target = commandName;
+  if (!isDashboard && (!target || !selectable.some((command) => command.name === target))) {
+    target = selectable[0]?.name || null;
+  }
+  if (!isDashboard && !target) {
+    return { embed: buildCategoryEmbed(category, guild), components: buildCategoryComponents(guildId, category) };
+  }
+
+  const rules = config.commandPermissions || {};
+  const rule = isDashboard
+    ? await getDashboardAccessRule(client, guildId)
+    : (await getCommandPermissionRule(client, guildId, target)).rule || { mode: 'everyone', roleIds: [], userIds: [] };
+
+  const mode = ['roles', 'users'].includes(rule.mode) ? 'custom' : rule.mode;
+  const validRoleIds = (rule.roleIds || []).filter((id) => guild.roles.cache.has(id));
+  const tokenSuffix = `${isDashboard ? '-' : categoryKey}:${target}`;
+
+  const fields = [
+    { name: 'Who can use it', value: MODE_LABELS[mode] || MODE_LABELS.everyone, inline: false },
+  ];
+  const listText = describeRule(rule);
+  if (mode === 'custom') {
+    fields.push({ name: 'Chosen', value: listText || '_Nobody picked yet — only server administrators can use it until you choose roles or users below._', inline: false });
+  }
+  fields.push({
+    name: 'Good to know',
+    value: [
+      '• Server administrators, the server owner and the bot owner can always use everything.',
+      isDashboard
+        ? '• Anyone allowed here can open this dashboard, but only Manage Server members can change these settings.'
+        : '• The command\'s own Discord permission requirements still apply on top (for example Ban Members).',
+      '• `/commands` and `/configwizard` can never be locked.',
+    ].join('\n'),
+  });
+
+  const embed = createEmbed({
+    title: isDashboard ? '🔐 Who can open this dashboard' : `👥 Who can use /${target}`,
+    description: isDashboard
+      ? 'Choose who is allowed to open the command dashboard.'
+      : `Category: **${category.displayName}** — pick a command, then choose who may use it.`,
+    color: mode === 'everyone' ? 'info' : 'warning',
+    fields,
+  });
+
+  const rows = [];
+
+  if (!isDashboard) {
+    rows.push(
+      new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(customId(DASHBOARD_PERM_COMMAND, guildId, categoryKey))
+          .setPlaceholder('Pick a command...')
+          .addOptions(
+            selectable.slice(0, 25).map((command) => {
+              const commandRule = rules[command.name.toLowerCase()];
+              const summary = commandRule
+                ? (MODE_LABELS[['roles', 'users'].includes(commandRule.mode) ? 'custom' : commandRule.mode] || 'Restricted')
+                : MODE_LABELS.everyone;
+              return new StringSelectMenuOptionBuilder()
+                .setLabel((command.isSubcommand ? command.name.replace(' ', ' · ') : command.name).slice(0, 100))
+                .setDescription(summary.replace(/\*\*/g, '').slice(0, 100))
+                .setValue(command.name.slice(0, 100))
+                .setDefault(command.name === target);
+            }),
+          ),
+      ),
+    );
+  }
+
+  rows.push(
+    new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(customId(DASHBOARD_PERM_MODE, guildId, tokenSuffix))
+        .setPlaceholder('Who can use it?')
+        .addOptions(
+          new StringSelectMenuOptionBuilder().setLabel('Everyone').setValue('everyone').setEmoji('🌐')
+            .setDescription('No extra restriction').setDefault(mode === 'everyone'),
+          new StringSelectMenuOptionBuilder().setLabel('Server administrators only').setValue('admins').setEmoji('🛡️')
+            .setDescription('Members with Manage Server').setDefault(mode === 'admins'),
+          new StringSelectMenuOptionBuilder().setLabel('Specific roles / users').setValue('custom').setEmoji('👥')
+            .setDescription('Pick the roles and users below').setDefault(mode === 'custom'),
+        ),
+    ),
+  );
+
+  if (mode === 'custom') {
+    const roleSelect = new RoleSelectMenuBuilder()
+      .setCustomId(customId(DASHBOARD_PERM_ROLES, guildId, tokenSuffix))
+      .setPlaceholder('🎭 Roles allowed...')
+      .setMinValues(0)
+      .setMaxValues(25);
+    if (validRoleIds.length > 0) roleSelect.setDefaultRoles(validRoleIds);
+
+    const userSelect = new UserSelectMenuBuilder()
+      .setCustomId(customId(DASHBOARD_PERM_USERS, guildId, tokenSuffix))
+      .setPlaceholder('👤 Users allowed...')
+      .setMinValues(0)
+      .setMaxValues(25);
+    if ((rule.userIds || []).length > 0) userSelect.setDefaultUsers(rule.userIds.slice(0, 25));
+
+    rows.push(new ActionRowBuilder().addComponents(roleSelect));
+    rows.push(new ActionRowBuilder().addComponents(userSelect));
+  }
+
+  const buttons = [
+    new ButtonBuilder()
+      .setCustomId(isDashboard ? customId(DASHBOARD_HOME, guildId) : customId(DASHBOARD_PERM_BACK, guildId, categoryKey))
+      .setLabel('Back')
+      .setEmoji('◀️')
+      .setStyle(ButtonStyle.Secondary),
+  ];
+  if (!isDashboard) {
+    buttons.push(
+      new ButtonBuilder()
+        .setCustomId(customId(DASHBOARD_PERM_RESET, guildId, tokenSuffix))
+        .setLabel('Allow everyone')
+        .setEmoji('🌐')
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(mode === 'everyone'),
+    );
+  }
+  rows.push(new ActionRowBuilder().addComponents(buttons));
+
+  return { embed, components: rows };
+}
+
+async function handleAccessEditorComponent(interaction, client, action, parts, guildId) {
+  const categoryKey = parts[2] === '-' ? null : parts[2];
+  const target = parts.slice(3).join(':') || null;
+  const isDashboard = action === DASHBOARD_ACCESS_OPEN || target === DASHBOARD_TARGET;
+
+  const show = async (cmd) => {
+    const view = await buildAccessEditorView(client, guildId, interaction.guild, categoryKey, isDashboard ? DASHBOARD_TARGET : cmd);
+    return interaction.update({ embeds: [view.embed], components: view.components });
+  };
+
+  if (action === DASHBOARD_ACCESS_OPEN) return show(DASHBOARD_TARGET);
+  if (action === DASHBOARD_PERM_OPEN) return show(null);
+  if (action === DASHBOARD_PERM_COMMAND) return show(interaction.values[0]);
+
+  if (action === DASHBOARD_PERM_BACK) {
+    const view = await buildDashboardView(client, guildId, interaction.guild, 'category', parts[2]);
+    return interaction.update({ embeds: [view.embed], components: view.components });
+  }
+
+  // Everything below changes settings.
+  if (!canManageAccessPolicy(interaction)) {
+    return interaction.reply({
+      content: 'You need the **Manage Server** permission to change who can use commands.',
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  const current = isDashboard
+    ? await getDashboardAccessRule(client, guildId)
+    : (await getCommandPermissionRule(client, guildId, target)).rule || { mode: 'everyone', roleIds: [], userIds: [] };
+
+  let next;
+  if (action === DASHBOARD_PERM_MODE) {
+    next = { mode: interaction.values[0], roleIds: current.roleIds, userIds: current.userIds };
+  } else if (action === DASHBOARD_PERM_ROLES) {
+    next = { mode: 'custom', roleIds: interaction.values, userIds: current.userIds };
+  } else if (action === DASHBOARD_PERM_USERS) {
+    next = { mode: 'custom', roleIds: current.roleIds, userIds: interaction.values };
+  } else if (action === DASHBOARD_PERM_RESET) {
+    next = { mode: 'everyone', roleIds: [], userIds: [] };
+  } else {
+    return show(target);
+  }
+
+  if (isDashboard) await setDashboardAccessPolicy(client, guildId, next);
+  else await setCommandPermissionAccess(client, guildId, target, next);
+
+  return show(target);
 }
 
 export async function buildDashboardView(client, guildId, guild, view = 'overview', categoryKey = null) {
@@ -306,6 +549,10 @@ export async function handleDashboardComponent(interaction, client) {
       content: 'This dashboard belongs to another server.',
       ephemeral: true,
     });
+  }
+
+  if (action.startsWith('cmdaccess_perm_') || action === DASHBOARD_ACCESS_OPEN) {
+    return handleAccessEditorComponent(interaction, client, action, parts, guildId);
   }
 
   if (action === DASHBOARD_COMMAND_SELECT) {

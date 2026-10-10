@@ -1,14 +1,15 @@
-# QOTD and owner-only /lock bypass feature
+# QOTD, dashboard-controlled `/lock`, and owner-only `/bypass lock`
 
-This build includes three changes:
+This build includes:
 
-1. `/qotd setup`, `/qotd status`, and `/qotd post` for a daily family-friendly trivia question.
-2. Command Permissions shows the current mode and the actual configured roles/users.
-3. `/lock` is guarded so only IDs configured in `OWNER_IDS` can execute it. Optional `bypass_role` and `bypass_member` options receive explicit `SendMessages: true` channel overwrites while `@everyone` is denied.
+1. `/qotd setup`, `/qotd status`, and `/qotd post` for daily family-friendly trivia.
+2. Command Permissions displays the current mode and configured roles/users. `/lock` is explicitly included in the individual command selector even if the bot has more than 25 commands.
+3. `/lock` is controlled by `/commands dashboard` → **Command Permissions** → **Moderation** (bulk category rule), or by selecting `/lock` in the individual command-permission selector. Its default is **Server administrators** until configured.
+4. `/bypass lock channel user:@Member` or `/bypass lock channel role:@Role` is a separate command reserved for bot owners configured in `OWNER_IDS`.
 
 ## Configure bot owners
 
-Set `OWNER_IDS` in the hosting environment (or local `.env`) to comma-separated Discord user IDs, without spaces being necessary:
+Set `OWNER_IDS` in the hosting environment (or local `.env`) to comma-separated Discord user IDs:
 
 ```env
 OWNER_IDS=123456789012345678,234567890123456789
@@ -16,17 +17,25 @@ OWNER_IDS=123456789012345678,234567890123456789
 
 Use your actual Discord user IDs. Do not put bot tokens or other secrets in this value. Restart the bot after changing it. The `isBotOwner()` helper reads this setting from `src/config/bot.js`.
 
-Discord does not support a slash-command visibility allowlist based on a bot's `OWNER_IDS`. Therefore `/lock` may appear in the command picker, but the code rejects every invocation whose user ID is not in `OWNER_IDS` before performing any action. Do not remove that runtime guard.
+## Use `/lock` and configure access
 
-## Use the lock bypass
+- `/lock` — denies `SendMessages` to `@everyone` in the current channel.
+- Open `/commands dashboard` → **Command Permissions** → choose **Moderation** to set a permission mode for commands in that category, including `/lock`.
+- To configure `/lock` individually, use the individual command permission selector and choose `/lock`.
+- Until configured, `/lock` defaults to **Server administrators**.
+- Bot owners and server owners retain the existing bypass behavior in the permission system. The dashboard controls who else may use it.
 
-- `/lock` — deny `SendMessages` to `@everyone`.
-- `/lock bypass_role:@Role` — also explicitly allow that role to send messages.
-- `/lock bypass_member:@Member` — also explicitly allow that member to send messages.
-- Both options can be provided together.
-- If the channel is already locked, running `/lock` with a bypass option updates/adds the exception; running it without options reports that it is already locked.
+The Discord command picker may still show `/lock` to members who are not allowed to execute it because this dashboard uses runtime permission checks; the bot will deny execution according to the configured mode. The bot needs **Manage Channels** in the channel being locked.
 
-The bot needs **Manage Channels**. The selected role/member exceptions apply to the current channel only. `/unlock` remains a separate existing command and was not changed by this feature.
+## Use owner-only lock bypass
+
+- `/bypass lock channel:#channel user:@Member` — lets that member send messages in the selected locked channel.
+- `/bypass lock channel:#channel role:@Role` — lets members with that role send messages in the selected locked channel.
+- Choose exactly one of `user` or `role` for each invocation. The `@everyone` role cannot be selected.
+- Only IDs listed in `OWNER_IDS` can use `/bypass`. This command is excluded from dashboard permission changes.
+- The bypass adds an explicit `SendMessages: true` overwrite for the selected target in that channel. Remove that overwrite through the channel's permission settings to revoke the bypass.
+
+`/unlock` remains a separate existing command and was not changed by this feature.
 
 ## Use QOTD
 
@@ -34,14 +43,16 @@ The bot needs **Manage Channels**. The selected role/member exceptions apply to 
 - `/qotd status` — view configuration.
 - `/qotd post` — publish a fresh question immediately.
 
-The bot needs Send Messages and Embed Links in the QOTD channel, plus Manage Roles; the winner role must be below the bot's highest role. Questions come from Open Trivia DB and are limited to easy/medium (difficulty 1–2/4) for an all-ages server. Used question keys and pending role expirations are stored in the existing guild config persistence.
+The bot needs Send Messages and Embed Links in the QOTD channel, plus Manage Roles; the winner role must be below the bot's highest role. Questions come from Open Trivia DB and are limited to easy/medium (difficulty 1–2/4). Used question keys and pending role expirations are stored in the existing guild config persistence.
 
 Role expiry is persisted as a timestamp and checked by the scheduler, which normally removes expired roles within about a minute after the 24-hour mark; Discord/API delays can affect exact timing. Questions are fetched from an external API, so a temporary source outage can prevent a scheduled post.
 
 ## Safe test steps
 
-1. Keep a backup of your original project.
-2. Run `node --check` on the modified files.
-3. Set `OWNER_IDS` and test `/lock` in a private test server. Verify a non-owner is denied and that a selected role/member can still send messages while everyone else cannot.
-4. Configure QOTD in the test server and verify posting, winner role assignment, and expiration.
-5. Deploy to your live host only after the test succeeds.
+1. Back up your project.
+2. Set `OWNER_IDS` in the hosting environment.
+3. Run the syntax checks listed in `README-INSTALL.md` if using the patch.
+4. Test in a private Discord server: confirm `/lock` appears in the Moderation permission category and individual command selector; configure its access mode; verify a disallowed member is denied.
+5. Test `/bypass lock` as a bot owner and confirm a selected user/role can send messages in the locked channel.
+6. Test QOTD setup, posting, winner role assignment, and expiration.
+7. Deploy to the live host only after testing. This patch does not deploy anything by itself.

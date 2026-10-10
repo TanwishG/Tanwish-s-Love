@@ -360,7 +360,12 @@ function buildPermissionCommandView(client, guildId, selectedCommand = null, rul
     }
   }
   commands.sort((a, b) => a.localeCompare(b));
-  const commandOptions = commands.slice(0, 25).map((name) => new StringSelectMenuOptionBuilder()
+  // Discord limits a select menu to 25 entries. Keep /lock explicitly available even
+  // when the bot has more than 25 commands and alphabetical truncation would hide it.
+  const visibleCommands = commands.includes('lock')
+    ? ['lock', ...commands.filter((name) => name !== 'lock').slice(0, 24)]
+    : commands.slice(0, 25);
+  const commandOptions = visibleCommands.map((name) => new StringSelectMenuOptionBuilder()
     .setLabel(`/${name}`.slice(0, 100))
     .setValue(name)
     .setDescription('Choose command to configure'.slice(0, 100)));

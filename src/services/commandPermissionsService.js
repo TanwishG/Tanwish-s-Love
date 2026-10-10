@@ -22,7 +22,9 @@ export async function getCommandPermissionRule(client, guildId, commandName) {
   const config = await getGuildConfig(client, guildId);
   const key = String(commandName || '').trim().toLowerCase();
   const rules = config?.commandPermissions && typeof config.commandPermissions === 'object' ? config.commandPermissions : {};
-  return { config, rule: rules[key] ? normalizeAccessRule(rules[key], 'admins') : null };
+  // Lock is moderation-sensitive: until configured in the dashboard, only admins may use it.
+  const defaultMode = key === 'lock' ? 'admins' : null;
+  return { config, rule: rules[key] ? normalizeAccessRule(rules[key], defaultMode || 'admins') : (defaultMode ? normalizeAccessRule(null, defaultMode) : null) };
 }
 
 export async function setCommandPermissionRule(client, guildId, commandName, mode, target = null) {

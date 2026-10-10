@@ -159,8 +159,8 @@ function validateCommands(commands) {
         if (cmd.name && cmd.name.length > 32) {
             validationErrors.push(`Command ${cmd.name} has name longer than 32 chars: "${cmd.name}" (${cmd.name.length} chars)`);
         }
-        if (cmd.description && cmd.description.length > 110) {
-            validationErrors.push(`Command ${cmd.name} has description longer than 110 chars: "${cmd.description}" (${cmd.description.length} chars)`);
+        if (cmd.description && cmd.description.length > 100) {
+            validationErrors.push(`Command ${cmd.name} has description longer than 100 chars: "${cmd.description}" (${cmd.description.length} chars)`);
         }
 
         if (!cmd.options) {
@@ -171,14 +171,14 @@ function validateCommands(commands) {
             if (option.name && option.name.length > 32) {
                 validationErrors.push(`Command ${cmd.name} option ${option.name} has name longer than 32 chars: "${option.name}" (${option.name.length} chars)`);
             }
-            if (option.description && option.description.length > 110) {
-                validationErrors.push(`Command ${cmd.name} option ${option.name} has description longer than 110 chars: "${option.description}" (${option.description.length} chars)`);
+            if (option.description && option.description.length > 100) {
+                validationErrors.push(`Command ${cmd.name} option ${option.name} has description longer than 100 chars: "${option.description}" (${option.description.length} chars)`);
             }
 
             if (option.choices) {
                 for (const choice of option.choices) {
-                    if (choice.name && choice.name.length > 110) {
-                        validationErrors.push(`Command ${cmd.name} option ${option.name} choice ${choice.name} has name longer than 110 chars: "${choice.name}" (${choice.name.length} chars)`);
+                    if (choice.name && choice.name.length > 100) {
+                        validationErrors.push(`Command ${cmd.name} option ${option.name} choice ${choice.name} has name longer than 100 chars: "${choice.name}" (${choice.name.length} chars)`);
                     }
                     if (choice.value && choice.value.length > 100) {
                         validationErrors.push(`Command ${cmd.name} option ${option.name} choice ${choice.name} has value longer than 100 chars: "${choice.value}" (${choice.value.length} chars)`);
@@ -194,8 +194,8 @@ function validateCommands(commands) {
                 if (subOption.name && subOption.name.length > 32) {
                     validationErrors.push(`Command ${cmd.name} subcommand ${option.name} option ${subOption.name} has name longer than 32 chars: "${subOption.name}" (${subOption.name.length} chars)`);
                 }
-                if (subOption.description && subOption.description.length > 110) {
-                    validationErrors.push(`Command ${cmd.name} subcommand ${option.name} option ${subOption.name} has description longer than 110 chars: "${subOption.description}" (${subOption.description.length} chars)`);
+                if (subOption.description && subOption.description.length > 100) {
+                    validationErrors.push(`Command ${cmd.name} subcommand ${option.name} option ${subOption.name} has description longer than 100 chars: "${subOption.description}" (${subOption.description.length} chars)`);
                 }
 
                 if (!subOption.choices) {
@@ -203,8 +203,8 @@ function validateCommands(commands) {
                 }
 
                 for (const choice of subOption.choices) {
-                    if (choice.name && choice.name.length > 110) {
-                        validationErrors.push(`Command ${cmd.name} subcommand ${option.name} option ${subOption.name} choice ${choice.name} has name longer than 110 chars: "${choice.name}" (${choice.name.length} chars)`);
+                    if (choice.name && choice.name.length > 100) {
+                        validationErrors.push(`Command ${cmd.name} subcommand ${option.name} option ${subOption.name} choice ${choice.name} has name longer than 100 chars: "${choice.name}" (${choice.name.length} chars)`);
                     }
                     if (choice.value && choice.value.length > 100) {
                         validationErrors.push(`Command ${cmd.name} subcommand ${option.name} option ${subOption.name} choice ${choice.name} has value longer than 100 chars: "${choice.value}" (${choice.value.length} chars)`);
@@ -257,6 +257,11 @@ async function registerGlobalCommands(client, clientId, commands, totalSubcomman
         await client.rest.put(`/applications/${clientId}/commands`, { body: [] });
     }
 
+    if (commands.length > MAX_COMMANDS) {
+        const dropped = commands.slice(MAX_COMMANDS).map((command) => `/${command.name}`).join(', ');
+        logger.error(`⚠️ ${commands.length} commands exist but Discord allows only ${MAX_COMMANDS}. NOT registered: ${dropped}`);
+    }
+
     logger.info(`Registering ${commandsToRegister.length} global commands...`);
     await client.rest.put(`/applications/${clientId}/commands`, { body: commandsToRegister });
     logger.info(`Successfully registered ${commandsToRegister.length} global commands`);
@@ -270,7 +275,11 @@ export async function registerCommands(client, options = {}) {
         const { commands, totalSubcommands } = collectCommandPayloads(client);
         await registerGlobalCommands(client, clientId, commands, totalSubcommands);
     } catch (error) {
-        logger.error('Error registering commands:', error);
+        logger.error(`❌ Slash command registration FAILED: ${error.message}`);
+        if (error.rawError?.errors) {
+            logger.error(`Discord says: ${JSON.stringify(error.rawError.errors).slice(0, 1500)}`);
+        }
+        logger.error('Slash commands will not appear or update until this is fixed (prefix commands still work).');
         throw error;
     }
 }

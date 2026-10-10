@@ -3,7 +3,8 @@ import { isBotOwner } from '../config/bot.js';
 import { getGuildConfig, updateGuildConfig } from './config/guildConfig.js';
 import { isProtectedCommand } from './commandAccessService.js';
 
-const VALID_MODES = new Set(['everyone', 'admins', 'roles', 'users']);
+// 'custom' = specific roles AND/OR users together (used by the dashboard); 'roles'/'users' come from the typed commands.
+const VALID_MODES = new Set(['everyone', 'admins', 'roles', 'users', 'custom']);
 
 function cleanIds(values) {
   return [...new Set((Array.isArray(values) ? values : []).filter((value) => typeof value === 'string' && /^\d{15,22}$/.test(value)))];
@@ -88,6 +89,52 @@ export async function setDashboardAccess(client, guildId, mode, target = null) {
   return next;
 }
 
+/** Who may change access rules: the bot owner, the server owner, or Manage Server/Administrator. */
+export function canManageAccessPolicy(interaction) {
+  if (!interaction?.user) return false;
+  if (isBotOwner(interaction.user.id)) return true;
+  if (interaction.guild?.ownerId === interaction.user.id) return true;
+  const permissions = interaction.memberPermissions || interaction.member?.permissions;
+  return Boolean(
+    permissions?.has?.(PermissionFlagsBits.Administrator) || permissions?.has?.(PermissionFlagsBits.ManageGuild),
+  );
+}
+
+function buildRule(mode, roleIds = [], userIds = []) {
+  if (!VALID_MODES.has(mode)) throw new Error('Invalid permission mode.');
+  return {
+    mode,
+    roleIds: mode === 'roles' || mode === 'custom' ? cleanIds(roleIds) : [],
+    userIds: mode === 'users' || mode === 'custom' ? cleanIds(userIds) : [],
+  };
+}
+
+export async function getDashboardAccessRule(client, guildId) {
+  const config = await getGuildConfig(client, guildId);
+  return normalizeAccessRule(config?.dashboardAccess, 'admins');
+}
+
+/** Replace the whole rule for a command (used by the dashboard pickers). */
+export async function setCommandPermissionAccess(client, guildId, commandName, { mode, roleIds = [], userIds = [] }) {
+  const key = String(commandName || '').trim().toLowerCase();
+  if (!key) throw new Error('Choose a command first.');
+  if (isProtectedCommand(key.split(' ')[0])) throw new Error(`The \`${key}\` command is protected and cannot have a custom access rule.`);
+
+  const config = await getGuildConfig(client, guildId);
+  const commandPermissions = { ...(config.commandPermissions || {}) };
+  if (mode === 'everyone') delete commandPermissions[key];
+  else commandPermissions[key] = buildRule(mode, roleIds, userIds);
+
+  await updateGuildConfig(client, guildId, { commandPermissions });
+  return commandPermissions[key] || null;
+}
+
+export async function setDashboardAccessPolicy(client, guildId, { mode, roleIds = [], userIds = [] }) {
+  const next = buildRule(mode, roleIds, userIds);
+  await updateGuildConfig(client, guildId, { dashboardAccess: next });
+  return next;
+}
+
 export async function canAccessDashboard(interaction, config = null) {
   if (!interaction?.guild || !interaction?.user) return false;
   if (isBotOwner(interaction.user.id) || interaction.guild.ownerId === interaction.user.id) return true;
@@ -102,6 +149,11 @@ export async function canAccessDashboard(interaction, config = null) {
     const roleCache = interaction.member?.roles?.cache;
     return Boolean(roleCache && rule.roleIds.some((roleId) => roleCache.has(roleId)));
   }
+  if (rule.mode === 'custom') {
+    const roleCache = interaction.member?.roles?.cache;
+    return rule.userIds.includes(interaction.user.id)
+      || Boolean(roleCache && rule.roleIds.some((roleId) => roleCache.has(roleId)));
+  }
   return false;
 }
 
@@ -113,6 +165,11 @@ export function canUseCommandByRule(member, userId, guild, rule) {
   if (normalized.mode === 'everyone') return true;
   if (normalized.mode === 'admins') return Boolean(member?.permissions?.has(PermissionFlagsBits.ManageGuild));
   if (normalized.mode === 'users') return normalized.userIds.includes(userId);
+  if (normalized.mode === 'custom') {
+    const roleCache = member?.roles?.cache;
+    return normalized.userIds.includes(userId)
+      || Boolean(roleCache && normalized.roleIds.some((roleId) => roleCache.has(roleId)));
+  }
   if (normalized.mode === 'roles') {
     const roleCache = member?.roles?.cache;
     return Boolean(roleCache && normalized.roleIds.some((roleId) => roleCache.has(roleId)));

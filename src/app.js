@@ -70,6 +70,8 @@ class TitanBot extends Client {
         logger.warn('║ Action Required: Fix PostgreSQL and restart bot      ║');
         logger.warn('╚═══════════════════════════════════════════════════════╝');
         logger.warn('');
+      } else if (dbStatus.isPersistent) {
+        startupLog('💾 Database Status: file storage (no PostgreSQL) - data is saved to the data/ folder');
       } else {
         startupLog(`✅ Database Status: ${dbStatus.connectionType} (fully operational)`);
       }
@@ -325,7 +327,12 @@ class TitanBot extends Client {
 
   async registerCommands() {
     try {
-      await registerSlashCommands(this, { clientId: this.config.bot.clientId });
+      const configuredId = this.config.bot.clientId;
+      const actualId = this.user?.id;
+      if (actualId && configuredId && configuredId !== actualId) {
+        logger.warn(`CLIENT_ID (${configuredId}) does not match the logged-in bot (${actualId}). Using ${actualId}. Fix CLIENT_ID in your host settings.`);
+      }
+      await registerSlashCommands(this, { clientId: actualId || configuredId });
     } catch (error) {
       logger.error('Error registering commands:', error);
     }
@@ -348,6 +355,7 @@ class TitanBot extends Client {
       logger.info('✅ Music players stopped');
 
       shutdownTts();
+      await this.db?.flush?.();
       logger.info('✅ TTS sessions stopped');
 
       if (this.webServer) {

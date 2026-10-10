@@ -389,7 +389,28 @@ function buildPermissionCommandView(client, guildId, selectedCommand = null, rul
   rows.push(new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(customId(DASHBOARD_HOME, guildId)).setLabel('Back').setEmoji('◀️').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(customId(DASHBOARD_REFRESH, guildId)).setLabel('Refresh').setEmoji('🔄').setStyle(ButtonStyle.Secondary)));
-  const modeText = rule ? `Current mode: **${rule.mode}**` : 'No custom rule set; built-in command permissions apply.';
+  const guild = client.guilds.cache.get(guildId);
+  let modeText = 'No custom rule set — the bot currently allows this command unless its built-in checks or Discord permissions deny it.';
+  if (rule) {
+    if (rule.mode === 'everyone') {
+      modeText = 'Current mode: **Everyone** — all server members can use it, subject to built-in command checks. Bot owners, server owners, and members with Administrator/Manage Server retain their bypass.';
+    } else if (rule.mode === 'admins') {
+      modeText = 'Current mode: **Server administrators** — members with Administrator or Manage Server can use it. Bot owners and server owners retain their bypass.';
+    } else if (rule.mode === 'roles') {
+      const allowedRoles = (rule.roleIds || []).map((id) => {
+        const role = guild?.roles.cache.get(id);
+        return role ? `${role} (**${role.name}**, ID: ${id})` : `Deleted/missing role (ID: ${id})`;
+      });
+      modeText = allowedRoles.length
+        ? `Current mode: **Selected roles** — allowed roles: ${allowedRoles.join(', ')}. Bot owners, server owners, and members with Administrator/Manage Server retain their bypass.`
+        : 'Current mode: **Selected roles**, but no valid role is configured. Bot owners, server owners, and members with Administrator/Manage Server retain their bypass.';
+    } else if (rule.mode === 'users') {
+      const allowedUsers = (rule.userIds || []).map((id) => `<@${id}> (ID: ${id})`);
+      modeText = allowedUsers.length
+        ? `Current mode: **Selected users** — allowed users: ${allowedUsers.join(', ')}. Bot owners, server owners, and members with Administrator/Manage Server retain their bypass.`
+        : 'Current mode: **Selected users**, but no user is configured. Bot owners, server owners, and members with Administrator/Manage Server retain their bypass.';
+    }
+  }
   const embed = createEmbed({ title: '🔐 Command Permissions', description: selectedCommand
     ? `Configure who can use **/${selectedCommand}**.\n${modeText}\n\nFor role/user modes, select the mode first, then choose the roles or users from the menu that appears.`
     : 'Choose a command below to configure who can use it. This interactive page replaces the typed `/commands permission` workflow.', color: 'info', footer: 'Bot owner and server owner retain access; protected commands cannot be configured.' });

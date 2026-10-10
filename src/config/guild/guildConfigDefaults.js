@@ -14,5 +14,4 @@ export const GUILD_CONFIG_DEFAULTS = {
     disabledCategories: {},
     commandPermissions: {},
     dashboardAccess: { mode: "admins", roleIds: [], userIds: [] },
-    qotd: { enabled: false, channelId: null, roleId: null, time: "18:00", timeZone: "Asia/Kolkata", maxDifficulty: 2, lastPostedDate: null, activeQuestion: null, usedQuestionKeys: [], roleExpiries: [] },
 };

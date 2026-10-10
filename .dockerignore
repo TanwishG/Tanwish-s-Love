@@ -14,5 +14,3 @@ logs
 .DS_Store
 coverage
 .agent-tools
-
-data/

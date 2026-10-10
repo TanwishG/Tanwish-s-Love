@@ -1,13 +1,7 @@
 import { pgDb } from '../postgresDatabase.js';
-import path from 'node:path';
 import { MemoryStorage } from '../memoryStorage.js';
-import { FileStorage } from '../fileStorage.js';
 import { logger } from '../logger.js';
 import { validateGuildConfigOrThrow } from '../schemas.js';
-
-function hasPostgresConfig() {
-    return Boolean(process.env.POSTGRES_URL || process.env.DATABASE_URL || process.env.POSTGRES_HOST);
-}
 
 class DatabaseWrapper {
     constructor() {
@@ -17,7 +11,6 @@ class DatabaseWrapper {
         this.connectionType = 'none';
         this.degradedModeWarningShown = false;
         this.degradedReason = null;
-        this.persistent = false;
     }
 
     async initialize() {
@@ -25,12 +18,7 @@ class DatabaseWrapper {
             return;
         }
 
-        const postgresConfigured = hasPostgresConfig();
-
         try {
-            if (!postgresConfigured) {
-                throw new Error('No PostgreSQL settings found (POSTGRES_URL / DATABASE_URL / POSTGRES_HOST)');
-            }
             logger.info('Attempting to connect to PostgreSQL...');
             const pgConnected = await pgDb.connect();
             if (pgConnected) {
@@ -51,35 +39,10 @@ class DatabaseWrapper {
                 throw schemaError;
             }
         } catch (error) {
-            if (postgresConfigured) {
-                logger.warn('PostgreSQL connection failed:', error.message);
-            } else {
-                logger.info(`${error.message}; using file storage instead.`);
-            }
+            logger.warn('PostgreSQL connection failed:', error.message);
 
             if (error.code === 'SCHEMA_VERSION_MISMATCH') {
                 throw error;
-            }
-        }
-
-        // No PostgreSQL: keep data in a JSON file so settings survive restarts.
-        // Set DATABASE_MODE=memory to opt out (data is then lost on restart).
-        if ((process.env.DATABASE_MODE || 'file').toLowerCase() !== 'memory') {
-            try {
-                const dataDir = process.env.DATA_DIR || path.join(process.cwd(), 'data');
-                const fileDb = new FileStorage(path.join(dataDir, 'bot-data.json'));
-                fileDb.load();
-
-                this.db = fileDb;
-                this.useFallback = true;
-                this.persistent = true;
-                this.connectionType = 'file';
-                this.degradedReason = postgresConfigured ? 'POSTGRES_UNAVAILABLE' : 'POSTGRES_NOT_CONFIGURED';
-                logger.info(`✅ File storage active - data is saved to ${path.join(dataDir, 'bot-data.json')}`);
-                this.initialized = true;
-                return;
-            } catch (error) {
-                logger.warn(`File storage could not start (${error.message}); falling back to memory.`);
             }
         }
 
@@ -159,23 +122,7 @@ class DatabaseWrapper {
     }
 
     isDegraded() {
-        return this.useFallback && !this.persistent;
-    }
-
-    /** True when data survives a restart without PostgreSQL (file storage). */
-    isPersistent() {
-        return this.persistent;
-    }
-
-    /** Reads are trustworthy on PostgreSQL and on file storage, but not on plain memory fallback. */
-    canServeReads() {
-        return Boolean(this.db) && (this.isAvailable() || this.persistent);
-    }
-
-    async flush() {
-        if (typeof this.db?.flush === 'function') {
-            await this.db.flush();
-        }
+        return this.useFallback;
     }
 
     isAvailable() {
@@ -186,8 +133,7 @@ class DatabaseWrapper {
         return {
             initialized: this.initialized,
             connectionType: this.connectionType,
-            isDegraded: this.isDegraded(),
-            isPersistent: this.persistent,
+            isDegraded: this.useFallback,
             isAvailable: this.isAvailable(),
             degradedReason: this.degradedReason,
         };
@@ -202,7 +148,7 @@ export const db = new DatabaseWrapper();
 
 export async function initializeDatabase() {
     try {
-        logger.info('Initializing Database (PostgreSQL > file storage > memory)...');
+        logger.info('Initializing Database (PostgreSQL > Memory fallback)...');
         await db.initialize();
         logger.info('✅ Database initialized');
         return { db };

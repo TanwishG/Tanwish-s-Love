@@ -144,6 +144,3 @@ dist
 # Database backup artifacts
 backups/
 *.dump
-
-# Local file-storage database (used when PostgreSQL is not configured)
-data/

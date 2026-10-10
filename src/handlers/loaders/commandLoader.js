@@ -152,6 +152,52 @@ function collectCommandPayloads(client) {
     return { commands, totalSubcommands };
 }
 
+function normalizeDiscordLimits(commands) {
+    // Discord enforces a 100-character limit for command/option descriptions
+    // and choice names. Keep this normalization limited to the registration
+    // payload so the source command definitions and prefix behavior are unchanged.
+    const truncate = (value, limit, label) => {
+        if (typeof value === 'string' && value.length > limit) {
+            logger.warn(`${label} exceeds Discord's ${limit}-character limit (${value.length}); truncating registration payload.`);
+            return value.slice(0, limit);
+        }
+        return value;
+    };
+
+    for (const command of commands) {
+        if (typeof command.description === 'string') {
+            command.description = truncate(command.description, 100, `/${command.name} description`);
+        }
+        for (const option of command.options || []) {
+            if (typeof option.description === 'string') {
+                option.description = truncate(option.description, 100, `/${command.name} option "${option.name}" description`);
+            }
+            for (const choice of option.choices || []) {
+                if (typeof choice.name === 'string') {
+                    choice.name = truncate(choice.name, 100, `/${command.name} choice "${choice.name}" name`);
+                }
+                if (typeof choice.value === 'string') {
+                    choice.value = truncate(choice.value, 100, `/${command.name} choice "${choice.name}" value`);
+                }
+            }
+            for (const subOption of option.options || []) {
+                if (typeof subOption.description === 'string') {
+                    subOption.description = truncate(subOption.description, 100, `/${command.name} subcommand "${option.name}" option "${subOption.name}" description`);
+                }
+                for (const choice of subOption.choices || []) {
+                    if (typeof choice.name === 'string') {
+                        choice.name = truncate(choice.name, 100, `/${command.name} subcommand "${option.name}" choice "${choice.name}" name`);
+                    }
+                    if (typeof choice.value === 'string') {
+                        choice.value = truncate(choice.value, 100, `/${command.name} subcommand "${option.name}" choice "${choice.name}" value`);
+                    }
+                }
+            }
+        }
+    }
+    return commands;
+}
+
 function validateCommands(commands) {
     const validationErrors = [];
 
@@ -246,6 +292,11 @@ async function registerGlobalCommands(client, clientId, commands, totalSubcomman
     }
 
     logger.info(`Preparing to register ${totalSubcommands + commands.length} commands globally`);
+    if (commands.length === 0) {
+        throw new Error('Refusing to overwrite Discord slash commands with an empty command list. Check command loading logs first.');
+    }
+    logger.info('Normalizing registration payload to Discord API limits...');
+    normalizeDiscordLimits(commands);
     logger.info('Validating commands before registration...');
     validateCommands(commands);
     logger.info('Command validation passed');
@@ -255,11 +306,6 @@ async function registerGlobalCommands(client, clientId, commands, totalSubcomman
     if (botConfig.commands?.deleteCommands) {
         logger.info('Clearing existing global commands before registration...');
         await client.rest.put(`/applications/${clientId}/commands`, { body: [] });
-    }
-
-    if (commands.length > MAX_COMMANDS) {
-        const dropped = commands.slice(MAX_COMMANDS).map((command) => `/${command.name}`).join(', ');
-        logger.error(`⚠️ ${commands.length} commands exist but Discord allows only ${MAX_COMMANDS}. NOT registered: ${dropped}`);
     }
 
     logger.info(`Registering ${commandsToRegister.length} global commands...`);
@@ -275,11 +321,7 @@ export async function registerCommands(client, options = {}) {
         const { commands, totalSubcommands } = collectCommandPayloads(client);
         await registerGlobalCommands(client, clientId, commands, totalSubcommands);
     } catch (error) {
-        logger.error(`❌ Slash command registration FAILED: ${error.message}`);
-        if (error.rawError?.errors) {
-            logger.error(`Discord says: ${JSON.stringify(error.rawError.errors).slice(0, 1500)}`);
-        }
-        logger.error('Slash commands will not appear or update until this is fixed (prefix commands still work).');
+        logger.error('Error registering commands:', error);
         throw error;
     }
 }

@@ -287,18 +287,41 @@ export function buildCategoryComponents(guildId, category) {
   return rows;
 }
 
-function buildPermissionCategoryView(client, guildId, selectedCategoryKey = null) {
+async function buildPermissionCategoryView(client, guildId, selectedCategoryKey = null) {
   const registry = buildCommandRegistry(client);
   const categories = [...registry.values()].map((category) => ({
     ...category,
     commands: category.commands.filter((command) => !isProtectedCommand(command.name) && !isProtectedCommand(command.name.split(' ')[0])),
   })).filter((category) => category.commands.length > 0);
   const selectedCategory = categories.find((category) => category.key === selectedCategoryKey) || null;
-  const categoryOptions = categories.slice(0, 25).map((category) => new StringSelectMenuOptionBuilder()
+  const modeLabels = { everyone: 'Everyone', admins: 'Server admins', roles: 'Selected roles', users: 'Selected users' };
+  const categoryModes = await Promise.all(categories.map(async (category) => {
+    const rules = await Promise.all(category.commands.map(async (command) => {
+      const result = await getCommandPermissionRule(client, guildId, command.name);
+      return result.rule || null;
+    }));
+    const effectiveModes = rules.map((rule) => rule?.mode || (null));
+    const distinct = [...new Set(effectiveModes)];
+    let modeLabel;
+    if (distinct.every((mode) => mode === null)) modeLabel = 'Default';
+    else if (distinct.length === 1 && distinct[0] !== null) modeLabel = modeLabels[distinct[0]] || 'Default';
+    else modeLabel = 'Mixed';
+    const counts = {};
+    for (const mode of effectiveModes) {
+      const key = mode || 'default';
+      counts[key] = (counts[key] || 0) + 1;
+    }
+    return { key: category.key, displayName: category.displayName, modeLabel, counts, total: category.commands.length };
+  }));
+  const selectedMode = categoryModes.find((item) => item.key === selectedCategory?.key) || null;
+  const categoryOptions = categories.slice(0, 25).map((category) => {
+    const mode = categoryModes.find((item) => item.key === category.key);
+    return new StringSelectMenuOptionBuilder()
     .setLabel(category.displayName.slice(0, 100))
-    .setDescription(`${category.commands.length} configurable commands`.slice(0, 100))
+    .setDescription(`Current mode: ${mode?.modeLabel || 'Default'}`.slice(0, 100))
     .setValue(category.key)
-    .setEmoji(category.icon));
+    .setEmoji(category.icon);
+  });
   const rows = [new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId(customId(DASHBOARD_PERMISSION_CATEGORY, guildId))
@@ -322,13 +345,27 @@ function buildPermissionCategoryView(client, guildId, selectedCategoryKey = null
     new ButtonBuilder().setCustomId(customId(DASHBOARD_HOME, guildId)).setLabel('Back').setEmoji('◀️').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(customId(DASHBOARD_REFRESH, guildId)).setLabel('Refresh').setEmoji('🔄').setStyle(ButtonStyle.Secondary),
   ));
+  const categoryModeLines = categoryModes.map((item) => {
+    const countSummary = Object.entries(item.counts).map(([mode, count]) =>
+      `${modeLabels[mode] || (mode === 'default' ? 'Default' : mode)}: ${count}`).join(', ');
+    return `• **${item.displayName}** — **${item.modeLabel}** (${countSummary})`;
+  });
+  const selectedDetail = selectedCategory && selectedMode
+    ? `\n\n**Current mode for ${selectedCategory.displayName}: ${selectedMode.modeLabel}**\n${Object.entries(selectedMode.counts).map(([mode, count]) => `${modeLabels[mode] || (mode === 'default' ? 'Default' : mode)}: ${count}`).join(' · ')} across ${selectedMode.total} commands.`
+    : '';
   const embed = createEmbed({
     title: '🔐 Category Permissions',
-    description: selectedCategory
+    description: (selectedCategory
       ? `Set the same access rule for **all configurable commands** in **${selectedCategory.displayName}** (${selectedCategory.commands.length} commands). This overwrites existing custom permission rules for those commands.`
-      : 'Choose a category to set access for all its commands at once. This is faster than configuring commands one by one.',
+      : 'Choose a category to set access for all its commands at once. The current saved mode for every category is listed below.')
+      + selectedDetail,
     color: 'info',
-    footer: 'Bot owner and server owner retain access; protected commands are excluded.',
+    fields: selectedCategory ? [] : [{
+      name: '📂 Current mode for every category',
+      value: chunkLines(categoryModeLines, 1000).join('\n\n').slice(0, 4000) || 'No configurable categories found.',
+      inline: false,
+    }],
+    footer: 'Bot owner and server owner retain access; protected commands are excluded. Mixed means commands in that category have different modes.',
   });
   return { embed, components: rows };
 }
@@ -427,7 +464,7 @@ export async function buildDashboardView(client, guildId, guild, view = 'overvie
   const snapshot = getCommandAccessSnapshot(client, config);
 
   if (view === 'permissions') {
-    return buildPermissionCategoryView(client, guildId, categoryKey);
+    return await buildPermissionCategoryView(client, guildId, categoryKey);
   }
   if (view === 'permission-command' && categoryKey) {
     const permissionState = await getCommandPermissionRule(client, guildId, categoryKey);
@@ -476,7 +513,7 @@ export async function handleDashboardComponent(interaction, client) {
 
   if (action === DASHBOARD_PERMISSION_CATEGORY) {
     const categoryKey = interaction.values[0];
-    const view = buildPermissionCategoryView(client, guildId, categoryKey);
+    const view = await buildPermissionCategoryView(client, guildId, categoryKey);
     return interaction.update({ embeds: [view.embed], components: view.components });
   }
 
@@ -487,7 +524,7 @@ export async function handleDashboardComponent(interaction, client) {
       const registry = buildCommandRegistry(client);
       const category = registry.get(categoryKey);
       if (!category) return interaction.reply({ content: 'Category not found. Refresh the dashboard and try again.', ephemeral: true });
-      const view = buildPermissionCategoryView(client, guildId, categoryKey);
+      const view = await buildPermissionCategoryView(client, guildId, categoryKey);
       const targetId = customId(mode === 'roles' ? DASHBOARD_PERMISSION_CATEGORY_ROLE : DASHBOARD_PERMISSION_CATEGORY_USER, guildId, encodeURIComponent(categoryKey));
       const selector = mode === 'roles'
         ? new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId(targetId).setPlaceholder('Select roles to allow for this category').setMinValues(1).setMaxValues(10))
@@ -495,7 +532,7 @@ export async function handleDashboardComponent(interaction, client) {
       return interaction.update({ embeds: [view.embed], components: [view.components[0], selector, ...view.components.slice(1)] });
     }
     const changed = await applyPermissionRuleToCategory(client, guildId, categoryKey, mode);
-    const view = buildPermissionCategoryView(client, guildId, categoryKey);
+    const view = await buildPermissionCategoryView(client, guildId, categoryKey);
     view.embed.setDescription(`Applied **${mode}** access to **${changed} commands** in this category. Choose another category or change the mode again.`);
     return interaction.update({ embeds: [view.embed], components: view.components });
   }
@@ -508,7 +545,7 @@ export async function handleDashboardComponent(interaction, client) {
       changed = await applyPermissionRuleToCategory(client, guildId, categoryKey, mode,
         mode === 'roles' ? { roleId: targetId } : { userId: targetId });
     }
-    const view = buildPermissionCategoryView(client, guildId, categoryKey);
+    const view = await buildPermissionCategoryView(client, guildId, categoryKey);
     view.embed.setDescription(`Applied **${mode}** access to **${changed} commands** in this category. Choose another category or change the mode again.`);
     return interaction.update({ embeds: [view.embed], components: view.components });
   }

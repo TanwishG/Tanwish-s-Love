@@ -287,16 +287,42 @@ export function buildCategoryComponents(guildId, category) {
   return rows;
 }
 
-function buildPermissionCategoryView(client, guildId, selectedCategoryKey = null) {
+async function buildPermissionCategoryView(client, guildId, selectedCategoryKey = null) {
   const registry = buildCommandRegistry(client);
   const categories = [...registry.values()].map((category) => ({
     ...category,
     commands: category.commands.filter((command) => !isProtectedCommand(command.name) && !isProtectedCommand(command.name.split(' ')[0])),
   })).filter((category) => category.commands.length > 0);
+
+  // Show the effective saved dashboard mode for every category, based on the
+  // individual command rules already stored for its commands.
+  const modeLabels = { everyone: 'Everyone', admins: 'Server admins', roles: 'Selected roles', users: 'Selected users' };
+  for (const category of categories) {
+    const rules = await Promise.all(category.commands.map(async (command) => {
+      const state = await getCommandPermissionRule(client, guildId, command.name);
+      return state?.rule || null;
+    }));
+    const signatures = new Set(rules.map((rule) => {
+      if (!rule) return 'default';
+      const ids = rule.mode === 'roles' ? (rule.roleIds || []).slice().sort().join(',')
+        : rule.mode === 'users' ? (rule.userIds || []).slice().sort().join(',') : '';
+      return `${rule.mode}:${ids}`;
+    }));
+    if (signatures.size === 1) {
+      const rule = rules[0];
+      if (!rule) category.currentPermissionMode = 'Default';
+      else if (rule.mode === 'roles' && (rule.roleIds || []).length === 0) category.currentPermissionMode = 'Selected roles (none set)';
+      else if (rule.mode === 'users' && (rule.userIds || []).length === 0) category.currentPermissionMode = 'Selected users (none set)';
+      else category.currentPermissionMode = modeLabels[rule.mode] || 'Default';
+    } else {
+      category.currentPermissionMode = 'Mixed modes';
+    }
+  }
+
   const selectedCategory = categories.find((category) => category.key === selectedCategoryKey) || null;
   const categoryOptions = categories.slice(0, 25).map((category) => new StringSelectMenuOptionBuilder()
     .setLabel(category.displayName.slice(0, 100))
-    .setDescription(`${category.commands.length} configurable commands`.slice(0, 100))
+    .setDescription(`${category.currentPermissionMode} · ${category.commands.length} commands`.slice(0, 100))
     .setValue(category.key)
     .setEmoji(category.icon));
   const rows = [new ActionRowBuilder().addComponents(
@@ -325,14 +351,13 @@ function buildPermissionCategoryView(client, guildId, selectedCategoryKey = null
   const embed = createEmbed({
     title: '🔐 Category Permissions',
     description: selectedCategory
-      ? `Set the same access rule for **all configurable commands** in **${selectedCategory.displayName}** (${selectedCategory.commands.length} commands). This overwrites existing custom permission rules for those commands.`
-      : 'Choose a category to set access for all its commands at once. This is faster than configuring commands one by one.',
+      ? `**${selectedCategory.displayName} — current mode: ${selectedCategory.currentPermissionMode}**\n\nSet the same access rule for **all configurable commands** in **${selectedCategory.displayName}** (${selectedCategory.commands.length} commands). This overwrites existing custom permission rules for those commands.`
+      : 'Choose a category to set access for all its commands at once. The dropdown description shows each category’s currently saved mode. “Mixed modes” means its commands have different permission settings; “Default” means no custom rule is saved.',
     color: 'info',
     footer: 'Bot owner and server owner retain access; protected commands are excluded.',
   });
   return { embed, components: rows };
 }
-
 async function applyPermissionRuleToCategory(client, guildId, categoryKey, mode, target = null) {
   const category = buildCommandRegistry(client).get(categoryKey);
   if (!category) throw new Error('That command category could not be found. Refresh the dashboard and try again.');
@@ -427,7 +452,7 @@ export async function buildDashboardView(client, guildId, guild, view = 'overvie
   const snapshot = getCommandAccessSnapshot(client, config);
 
   if (view === 'permissions') {
-    return buildPermissionCategoryView(client, guildId, categoryKey);
+    return await buildPermissionCategoryView(client, guildId, categoryKey);
   }
   if (view === 'permission-command' && categoryKey) {
     const permissionState = await getCommandPermissionRule(client, guildId, categoryKey);
@@ -476,7 +501,7 @@ export async function handleDashboardComponent(interaction, client) {
 
   if (action === DASHBOARD_PERMISSION_CATEGORY) {
     const categoryKey = interaction.values[0];
-    const view = buildPermissionCategoryView(client, guildId, categoryKey);
+    const view = await buildPermissionCategoryView(client, guildId, categoryKey);
     return interaction.update({ embeds: [view.embed], components: view.components });
   }
 
@@ -487,7 +512,7 @@ export async function handleDashboardComponent(interaction, client) {
       const registry = buildCommandRegistry(client);
       const category = registry.get(categoryKey);
       if (!category) return interaction.reply({ content: 'Category not found. Refresh the dashboard and try again.', ephemeral: true });
-      const view = buildPermissionCategoryView(client, guildId, categoryKey);
+      const view = await buildPermissionCategoryView(client, guildId, categoryKey);
       const targetId = customId(mode === 'roles' ? DASHBOARD_PERMISSION_CATEGORY_ROLE : DASHBOARD_PERMISSION_CATEGORY_USER, guildId, encodeURIComponent(categoryKey));
       const selector = mode === 'roles'
         ? new ActionRowBuilder().addComponents(new RoleSelectMenuBuilder().setCustomId(targetId).setPlaceholder('Select roles to allow for this category').setMinValues(1).setMaxValues(10))
@@ -495,7 +520,7 @@ export async function handleDashboardComponent(interaction, client) {
       return interaction.update({ embeds: [view.embed], components: [view.components[0], selector, ...view.components.slice(1)] });
     }
     const changed = await applyPermissionRuleToCategory(client, guildId, categoryKey, mode);
-    const view = buildPermissionCategoryView(client, guildId, categoryKey);
+    const view = await buildPermissionCategoryView(client, guildId, categoryKey);
     view.embed.setDescription(`Applied **${mode}** access to **${changed} commands** in this category. Choose another category or change the mode again.`);
     return interaction.update({ embeds: [view.embed], components: view.components });
   }
@@ -508,7 +533,7 @@ export async function handleDashboardComponent(interaction, client) {
       changed = await applyPermissionRuleToCategory(client, guildId, categoryKey, mode,
         mode === 'roles' ? { roleId: targetId } : { userId: targetId });
     }
-    const view = buildPermissionCategoryView(client, guildId, categoryKey);
+    const view = await buildPermissionCategoryView(client, guildId, categoryKey);
     view.embed.setDescription(`Applied **${mode}** access to **${changed} commands** in this category. Choose another category or change the mode again.`);
     return interaction.update({ embeds: [view.embed], components: view.components });
   }

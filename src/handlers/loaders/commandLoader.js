@@ -263,7 +263,26 @@ async function registerGlobalCommands(client, clientId, commands, totalSubcomman
     }
 
     logger.info(`Registering ${commandsToRegister.length} global commands...`);
-    await client.rest.put(`/applications/${clientId}/commands`, { body: commandsToRegister });
+
+    // If Discord rate-limits this request the REST library waits silently. Say so out loud.
+    const onRateLimit = (info) => {
+        const seconds = Math.ceil((info.timeToReset || 0) / 1000);
+        logger.warn(`⏳ Discord rate limit while registering commands (${info.method} ${info.route}): must wait ${seconds}s (~${Math.round(seconds / 60)} min).`);
+        if (seconds > 600) {
+            logger.warn('⏳ That is a long wait: Discord limits how many command changes one bot can make per day. Do NOT restart the bot repeatedly. Wait, or try again tomorrow.');
+        }
+    };
+    client.rest.on?.('rateLimited', onRateLimit);
+    const waitNotice = setInterval(() => {
+        logger.warn('Still waiting for Discord to accept the command registration (rate limit or connection problem)...');
+    }, 30_000);
+
+    try {
+        await client.rest.put(`/applications/${clientId}/commands`, { body: commandsToRegister });
+    } finally {
+        clearInterval(waitNotice);
+        client.rest.off?.('rateLimited', onRateLimit);
+    }
     logger.info(`Successfully registered ${commandsToRegister.length} global commands`);
 
     // Ask Discord what it actually has now, so a silent problem shows up in the log.
@@ -276,6 +295,12 @@ async function registerGlobalCommands(client, clientId, commands, totalSubcomman
         logger.warn(`Could not verify registered commands: ${verifyError.message}`);
     }
     logger.info('Global commands may take up to an hour to appear in all servers on first deploy');
+}
+
+/** The exact list of commands that is sent to Discord (already trimmed to Discord's limit). */
+export function getRegistrationPayload(client) {
+    const { commands } = collectCommandPayloads(client);
+    return prepareCommandsForRegistration(commands);
 }
 
 export async function registerCommands(client, options = {}) {

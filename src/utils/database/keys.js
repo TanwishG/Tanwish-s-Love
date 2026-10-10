@@ -254,3 +254,4 @@ export function getLegacyVariantsForCanonical(canonicalKey) {
 export const getTtsGuildKey = (guildId) => `guild:${guildId}:tts`;
 export const getTtsUserKey = (userId) => `user:${userId}:tts`;
 export const getCustomCommandsKey = (guildId) => `guild:${guildId}:custom_commands`;
+export const getLockBypassKey = (guildId) => `guild:${guildId}:lock_bypass`;

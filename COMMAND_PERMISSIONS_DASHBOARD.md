@@ -57,3 +57,7 @@ If no `POSTGRES_URL`, `DATABASE_URL` or `POSTGRES_HOST` is set, the bot automati
 ## !perms
 
 Type `!perms` (Manage Server required) to see the permissions the bot needs, which ones it has or is missing in this server, and an invite link containing exactly those permissions, so Administrator is not required.
+
+## Lock bypass
+
+`/bypass lock channel:<channel> target:<user or role>` lets that person or role keep talking in the channel while it is locked (it adds a "Send Messages" allow override for them, which beats the @everyone lock). `/bypass remove` takes it away again, and `/bypass list [channel]` shows who has it. `/lock` mentions the people who can still speak. Requires Manage Channels; the bot needs View Channel, Send Messages, Manage Channels and Manage Roles in that channel.

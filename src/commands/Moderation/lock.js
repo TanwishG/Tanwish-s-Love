@@ -6,6 +6,7 @@ import { getColor } from '../../config/bot.js';
 
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { replyUserError, ErrorTypes } from '../../utils/errorHandler.js';
+import { getChannelBypass, mentionEntry } from '../../services/lockBypassService.js';
 export default {
     data: new SlashCommandBuilder()
     .setName("lock")
@@ -56,11 +57,19 @@ export default {
         }
       });
 
+      // Mention anyone who was given a bypass with /bypass lock.
+      const bypass = await getChannelBypass(client, interaction.guild.id, channel.id).catch(() => []);
+      const bypassNote = bypass.length
+        ? `\nStill able to speak: ${bypass.map(mentionEntry).join(', ')}`
+        : '';
+
       await InteractionHelper.safeEditReply(interaction, {
         embeds: [
           successEmbed(
             `🔒 **Channel Locked**`,
-            `${channel} is now locked down. No one can speak here now.`,
+            bypass.length
+              ? `${channel} is now locked.${bypassNote}`
+              : `${channel} is now locked down. No one can speak here now.`,
           ),
         ],
       });

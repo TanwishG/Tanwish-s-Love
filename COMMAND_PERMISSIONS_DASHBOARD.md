@@ -69,3 +69,11 @@ Only users listed in `OWNER_IDS` can use these (they are chat commands, so they 
 - `!status online | idle | dnd | invisible` (`sleep` = idle, `busy` = dnd)
 - `!activity playing|watching|listening|competing|custom <text>` and `!activity clear`
 - `!presence` shows the current setting; `!presence reset` goes back to the default in the config file
+
+## !test (check who can use what)
+
+Type `!test` (Manage Server or bot owner) for a full report: it runs the bot's real access checks for pretend people (a normal member, a Manage Server member, the configured mod role, an administrator, the bot owner) and for you, then shows how many commands in each category each of them can use, any problems it found, whether your saved access rules behave as configured, and whether the owner-only commands (`!slashcheck`, `!slashhere`, `!status`, `!activity`, `!presence`) correctly refuse strangers and work for the owner.
+
+- `!test <command>` explains one command, e.g. `!test ban` or `!test bypass lock`.
+- `!test <command> @member` also checks that specific person.
+- It cannot see Discord's own per-server overrides (Server Settings -> Integrations), so check those there if something still looks off.

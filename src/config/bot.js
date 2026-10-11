@@ -41,7 +41,14 @@ export const botConfig = {
     // Default wait time between command uses (in seconds).
     defaultCooldown: 3,
 
-    // If true, old commands are removed before re-registering.
+    // Where slash commands are registered:
+    //   "guild"  - in every server the bot is in (instant, reliable; recommended for a bot in a few servers)
+    //   "global" - one worldwide registration (can take up to an hour and can be blocked by Discord rate limits)
+    // Can also be set with the COMMAND_SCOPE environment variable.
+    scope: (process.env.COMMAND_SCOPE || "guild").toLowerCase(),
+
+    // If true, old commands are removed before re-registering (only used when scope is "global").
+    // Leave this false: it adds an extra request to the global endpoint.
     deleteCommands: false,
 
     // Optional server ID retained for tutorial compatibility; not used for command registration.

@@ -1,7 +1,8 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
-import { Collection } from 'discord.js';
+import { createHash } from 'node:crypto';
+import { Collection, Routes } from 'discord.js';
 import { logger } from '../../utils/logger.js';
 import botConfig from '../../config/bot.js';
 
@@ -303,11 +304,112 @@ export function getRegistrationPayload(client) {
     return prepareCommandsForRegistration(commands);
 }
 
+const GUILD_TIMEOUT_MS = 60_000;
+const inviteLink = (id) => `https://discord.com/oauth2/authorize?client_id=${id}&scope=bot%20applications.commands&permissions=8`;
+
+/** "guild" (default): register in each server. "global": one worldwide registration. */
+export function getCommandScope() {
+    return String(botConfig.commands?.scope || 'guild').toLowerCase() === 'global' ? 'global' : 'guild';
+}
+
+function withTimeout(promise, ms, label) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label}: Discord did not answer within ${Math.round(ms / 1000)}s (probably rate limited)`)), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Registers (or removes) the slash commands in ONE server. Instant, and uses a separate Discord
+ * limit from global registration. Skips the request when nothing changed since last time.
+ */
+export async function registerCommandsForGuild(client, guildId, options = {}) {
+    const { clientId = client.user?.id, force = false, remove = false, timeoutMs = GUILD_TIMEOUT_MS, payload = null } = options;
+    const route = Routes.applicationGuildCommands(clientId, guildId);
+    const hashKey = `bot:command_hash:${guildId}`;
+
+    if (remove) {
+        await withTimeout(client.rest.put(route, { body: [] }), timeoutMs, 'Removing server commands');
+        try { await client.db?.delete(hashKey); } catch { /* ignore */ }
+        return { status: 'removed', count: 0 };
+    }
+
+    const body = payload ?? getRegistrationPayload(client);
+    const hash = createHash('sha256').update(JSON.stringify(body)).digest('hex');
+
+    if (!force) {
+        let stored = null;
+        try { stored = await client.db?.get(hashKey, null); } catch { /* ignore */ }
+        if (stored === hash) {
+            try {
+                const current = await withTimeout(client.rest.get(route), timeoutMs, 'Checking server commands');
+                if (current.length === body.length) return { status: 'unchanged', count: body.length };
+            } catch {
+                // could not verify: fall through and register again
+            }
+        }
+    }
+
+    await withTimeout(client.rest.put(route, { body }), timeoutMs, 'Registering server commands');
+    try { await client.db?.set(hashKey, hash); } catch { /* ignore */ }
+    return { status: 'registered', count: body.length };
+}
+
+export async function registerCommandsForAllGuilds(client, options = {}) {
+    const clientId = options.clientId || client.user?.id;
+    const guilds = [...client.guilds.cache.values()];
+    const payload = getRegistrationPayload(client);
+
+    logger.info(`Command scope: per-server. Registering ${payload.length} commands in ${guilds.length} server(s)...`);
+
+    const onRateLimit = (info) => {
+        logger.warn(`Discord rate limit while registering commands (${info.method} ${info.route}): waiting ${Math.ceil((info.timeToReset || 0) / 1000)}s`);
+    };
+    client.rest.on?.('rateLimited', onRateLimit);
+
+    let registered = 0;
+    let failed = 0;
+    try {
+        for (const guild of guilds) {
+            try {
+                const result = await registerCommandsForGuild(client, guild.id, { clientId, payload, timeoutMs: options.timeoutMs });
+                registered += 1;
+                logger.info(`Commands in "${guild.name}": ${result.count} (${result.status})`);
+            } catch (error) {
+                failed += 1;
+                logger.warn(`Could not register commands in "${guild.name}" (${guild.id}): ${error.message}`);
+                if (error.status === 403 || error.code === 50001) {
+                    logger.warn(`The bot lacks the "applications.commands" permission there. Re-invite it with: ${inviteLink(clientId)}`);
+                }
+            }
+        }
+    } finally {
+        client.rest.off?.('rateLimited', onRateLimit);
+    }
+
+    logger.info(`Per-server command registration finished: ${registered} ok, ${failed} failed`);
+    return { registered, failed };
+}
+
 export async function registerCommands(client, options = {}) {
     const { clientId = null } = options;
 
     try {
         const { commands, totalSubcommands } = collectCommandPayloads(client);
+
+        if (getCommandScope() === 'guild') {
+            // Validated now; the actual registration happens per server once the bot is ready.
+            validateCommands(commands);
+            const prepared = prepareCommandsForRegistration(commands);
+            if (commands.length > MAX_COMMANDS) {
+                const dropped = commands.slice(MAX_COMMANDS).map((command) => `/${command.name}`).join(', ');
+                logger.error(`${commands.length} commands exist but Discord allows only ${MAX_COMMANDS}. NOT registered: ${dropped}`);
+            }
+            logger.info(`Command scope: per-server (${prepared.length} commands). They are registered in each server when the bot is ready.`);
+            return;
+        }
+
         await registerGlobalCommands(client, clientId, commands, totalSubcommands);
     } catch (error) {
         logger.error(`❌ Slash command registration FAILED: ${error.message}`);

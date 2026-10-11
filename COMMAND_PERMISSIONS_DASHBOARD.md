@@ -77,3 +77,7 @@ Type `!test` (Manage Server or bot owner) for a full report: it runs the bot's r
 - `!test <command>` explains one command, e.g. `!test ban` or `!test bypass lock`.
 - `!test <command> @member` also checks that specific person.
 - It cannot see Discord's own per-server overrides (Server Settings -> Integrations), so check those there if something still looks off.
+
+## Slash command registration (per server)
+
+By default (`scope: "guild"` in `config/bot.js`, or `COMMAND_SCOPE=guild`) the bot registers its slash commands in every server it is in when it starts, and again when it joins a new server. This is instant and does not depend on Discord's global registration, which can get stuck behind a rate limit. If nothing changed since the last start it only does a cheap check, so restarts never use up Discord's daily command limit. `!slashhere` still forces a re-register in one server, and `!slashcheck` shows the status. Set `COMMAND_SCOPE=global` to go back to worldwide registration (leave `deleteCommands` false).

@@ -84,18 +84,39 @@ export default {
             }
 
             // ---------- full report ----------
-            const report = await runAccessTest(client, message.guild, caller, { extraMember });
-            const rules = await verifyRules(client, message.guild);
+            // Each part is sent as its own message, so one slow or failing part can never hide the rest.
+            const working = await message.reply({ content: 'Running the access test. This can take a few seconds...', allowedMentions: { parse: [], repliedUser: false } });
+            const send = (embed) => message.channel.send({ embeds: [embed], allowedMentions: { parse: [] } });
 
-            const probes = await probeOwnerCommands(client, message.guild, [
+            const section = async (name, work) => {
+                try {
+                    return { ok: true, value: await Promise.race([
+                        work(),
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('timed out after 30s')), 30_000)),
+                    ]) };
+                } catch (error) {
+                    logger.error(`!test section "${name}" failed:`, error);
+                    return { ok: false, error: `${name} could not be checked: ${error.message}` };
+                }
+            };
+
+            const reportPart = await section('Command access', () => runAccessTest(client, message.guild, caller, { extraMember }));
+            const rulesPart = await section('Access rules', () => verifyRules(client, message.guild));
+            const probesPart = await section('Owner-only commands', () => probeOwnerCommands(client, message.guild, [
                 { command: `${prefix}slashcheck`, handler: slashDiagnostics, ownerSafe: false },
                 { command: `${prefix}slashhere`, handler: slashDiagnostics, ownerSafe: false },
                 { command: `${prefix}presence`, handler: ownerPresence, ownerSafe: true },
                 { command: `${prefix}status`, handler: ownerPresence, ownerSafe: true },
                 { command: `${prefix}activity`, handler: ownerPresence, ownerSafe: true },
-            ]);
+            ]));
 
-            const problems = [...rules.problems];
+            const report = reportPart.ok ? reportPart.value : null;
+            const rules = rulesPart.ok ? rulesPart.value : null;
+            const probes = probesPart.ok ? probesPart.value : [];
+
+            const problems = [];
+            for (const part of [reportPart, rulesPart, probesPart]) if (!part.ok) problems.push(part.error);
+            if (rules) problems.push(...rules.problems);
             const owners = getBotOwners();
             if (owners.length === 0) problems.push('OWNER_IDS is empty, so nobody can use the owner-only commands');
             if (isMaintenanceMode()) problems.push('maintenance mode is ON, so only the bot owner can use commands');
@@ -103,20 +124,23 @@ export default {
                 if (!probe.strangerBlocked) problems.push(`${probe.command}: a non-owner was NOT blocked`);
                 if (probe.ownerOk === false) problems.push(`${probe.command}: did not respond for the owner`);
             }
-            const disabled = report.categories.filter((c) => c.total > 0 && c.counts.member === 0 && c.counts.admin === 0);
-            for (const c of disabled) problems.push(`category ${c.name}: nobody except the bot owner can use it`);
+            if (report) {
+                for (const c of report.categories.filter((entry) => entry.total > 0 && entry.counts.member === 0 && entry.counts.admin === 0)) {
+                    problems.push(`category ${c.name}: nobody except the bot owner can use it`);
+                }
+            }
 
-            const total = report.categories.reduce((n, c) => n + c.total, 0);
-            const personaNames = report.personas.map((p) => p.label).join(', ');
-
-            const blockedForYou = report.categories.flatMap((c) => c.blockedForYou.map((b) => `/${b.name} - ${b.reason}`));
+            const total = report ? report.categories.reduce((n, c) => n + c.total, 0) : 0;
+            const blockedForYou = report ? report.categories.flatMap((c) => c.blockedForYou.map((b) => `/${b.name} - ${b.reason}`)) : [];
 
             const summary = createEmbed({
                 title: 'Access test',
-                description: [
-                    `Checked **${total}** commands (including subcommands) in **${report.categories.length}** categories as: ${personaNames}.`,
-                    'This runs the same checks the bot uses for real: maintenance mode, category switch, dashboard on/off, access rules, then the command\'s Discord permission.',
-                ].join('\n'),
+                description: report
+                    ? [
+                        `Checked **${total}** commands (including subcommands) in **${report.categories.length}** categories as: ${report.personas.map((p) => p.label).join(', ')}.`,
+                        'This runs the same checks the bot uses for real: maintenance mode, category switch, dashboard on/off, access rules, then the command\'s Discord permission.',
+                    ].join('\n')
+                    : 'The command check could not run (see Problems below).',
                 color: problems.length ? 'warning' : 'success',
                 fields: [
                     {
@@ -124,56 +148,59 @@ export default {
                         value: problems.length ? clip(problems.slice(0, 12).map((p) => `- ${p}`).join('\n'), 1000) : 'None. Everything behaved as configured.',
                         inline: false,
                     },
-                    {
+                    ...(report ? [{
                         name: `Blocked for you (${blockedForYou.length})`,
                         value: blockedForYou.length ? clip(blockedForYou.slice(0, 8).join('\n') + (blockedForYou.length > 8 ? `\n...and ${blockedForYou.length - 8} more` : ''), 1000) : 'Nothing. You can use every command.',
                         inline: false,
-                    },
+                    }] : []),
                 ],
             });
+            await working.edit({ content: null, embeds: [summary], allowedMentions: { parse: [] } }).catch(() => send(summary));
 
-            const matrix = createEmbed({
-                title: 'Who can use what',
-                description: clip(report.categories.map((c) =>
-                    `**${c.name}** (${c.total}): ${report.personas.map((p) => `${p.label} ${c.counts[p.key]}`).join(' | ')}`,
-                ).join('\n'), 4000),
-                color: 'info',
-                footer: 'Numbers = how many commands in the category that person may use. Use !test <command> for the reason behind a single command.',
-            });
+            if (report) {
+                await send(createEmbed({
+                    title: 'Who can use what',
+                    description: clip(report.categories.map((c) =>
+                        `**${c.name}** (${c.total}): ${report.personas.map((p) => `${p.label} ${c.counts[p.key]}`).join(' | ')}`,
+                    ).join('\n'), 4000),
+                    color: 'info',
+                    footer: 'Numbers = how many commands in the category that person may use. Use !test <command> for the reason behind a single command.',
+                }));
+            }
 
-            const ownerLines = probes.map((probe) => {
-                const stranger = probe.strangerBlocked ? 'non-owners blocked' : 'NON-OWNERS CAN USE IT';
-                const owner = probe.ownerOk === null ? '' : probe.ownerOk ? ', owner works' : ', OWNER DID NOT WORK';
-                return `${probe.strangerBlocked && probe.ownerOk !== false ? OK : NO} \`${probe.command}\` - ${stranger}${owner}`;
-            });
-            const ownerEmbed = createEmbed({
-                title: 'Owner-only commands',
-                description: [
-                    `You are ${isBotOwner(message.author.id) ? '**recognised as the bot owner**' : '**not** the bot owner'}. Owner IDs configured: **${owners.length}**.`,
-                    '',
-                    ...ownerLines,
-                    '',
-                    'The bot owner skips: maintenance mode, command cooldowns, dashboard on/off, access rules, and the command\'s Discord permission check.',
-                ].join('\n'),
-                color: probes.every((p) => p.strangerBlocked) && owners.length > 0 ? 'success' : 'warning',
-            });
+            if (probesPart.ok) {
+                const ownerLines = probes.map((probe) => {
+                    const stranger = probe.strangerBlocked ? 'non-owners blocked' : 'NON-OWNERS CAN USE IT';
+                    const owner = probe.ownerOk === null ? '' : probe.ownerOk ? ', owner works' : ', OWNER DID NOT WORK';
+                    return `${probe.strangerBlocked && probe.ownerOk !== false ? OK : NO} \`${probe.command}\` - ${stranger}${owner}`;
+                });
+                await send(createEmbed({
+                    title: 'Owner-only commands',
+                    description: [
+                        `You are ${isBotOwner(message.author.id) ? '**recognised as the bot owner**' : '**not** the bot owner'}. Owner IDs configured: **${owners.length}**.`,
+                        '',
+                        ...ownerLines,
+                        '',
+                        'The bot owner skips: maintenance mode, command cooldowns, dashboard on/off, access rules, and the command\'s Discord permission check.',
+                    ].join('\n'),
+                    color: probes.every((p) => p.strangerBlocked) && owners.length > 0 ? 'success' : 'warning',
+                }));
+            }
 
-            const embeds = [summary, matrix, ownerEmbed];
-
-            const ruleLines = rules.lines.map((line) => `${line.ok ? OK : NO} **${line.label}** - ${line.who}${line.ok ? '' : ` (${line.failures.join('; ')})`}`);
-            ruleLines.push(`**${rules.dashLine.label}** - ${rules.dashLine.text}`);
-            embeds.push(createEmbed({
-                title: `Access rules check (${rules.ruleCount})`,
-                description: rules.ruleCount
-                    ? clip(ruleLines.join('\n'), 4000)
-                    : `No access rules are set, so nothing is restricted by rules.\n${ruleLines.at(-1)}`,
-                color: 'info',
-            }));
-
-            await message.reply({ embeds, allowedMentions: { parse: [], repliedUser: false } });
+            if (rules) {
+                const ruleLines = rules.lines.map((line) => `${line.ok ? OK : NO} **${line.label}** - ${line.who}${line.ok ? '' : ` (${line.failures.join('; ')})`}`);
+                ruleLines.push(`**${rules.dashLine.label}** - ${rules.dashLine.text}`);
+                await send(createEmbed({
+                    title: `Access rules check (${rules.ruleCount})`,
+                    description: rules.ruleCount
+                        ? clip(ruleLines.join('\n'), 4000)
+                        : `No access rules are set, so nothing is restricted by rules.\n${ruleLines.at(-1)}`,
+                    color: 'info',
+                }));
+            }
         } catch (error) {
             logger.error('Error in !test handler:', error);
-            await message.reply('Something went wrong while running the test. Check the console for details.').catch(() => {});
+            await message.reply(`Something went wrong while running the test: ${error.message}`).catch(() => {});
         }
     },
 };

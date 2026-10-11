@@ -9,7 +9,7 @@
 import { Events, Routes } from 'discord.js';
 import { getCommandPrefix, isBotOwner } from '../config/bot.js';
 import { getGuildConfig } from '../services/config/guildConfig.js';
-import { getRegistrationPayload } from '../handlers/loaders/commandLoader.js';
+import { getCommandScope, registerCommandsForGuild } from '../handlers/loaders/commandLoader.js';
 import { logger } from '../utils/logger.js';
 
 const TIMEOUT_MS = 20_000;
@@ -59,6 +59,7 @@ export default {
                 const configured = process.env.CLIENT_ID;
                 lines.push(`CLIENT_ID setting: ${configured || '(not set)'}${configured && configured !== botId ? '  <-- DOES NOT MATCH the bot id!' : ''}`);
                 lines.push(`Commands the bot has loaded: ${client.commands.size}`);
+                lines.push(`Registration scope: ${getCommandScope()} ${getCommandScope() === 'guild' ? '(automatic, per server)' : '(global)'}`);
 
                 try {
                     const global = await withTimeout(client.rest.get(Routes.applicationCommands(botId)), 'Global commands');
@@ -86,12 +87,20 @@ export default {
             // !slashhere / !slashhere off
             const remove = text.endsWith(' off');
             try {
-                const body = remove ? [] : getRegistrationPayload(client);
-                await message.reply(remove ? 'Removing the server-only commands...' : `Registering ${body.length} commands in this server...`);
-                await withTimeout(client.rest.put(Routes.applicationGuildCommands(botId, guildId), { body }), 'Registration');
+                await message.reply(remove ? 'Removing the server-only commands...' : 'Registering the slash commands in this server...');
+                const result = await registerCommandsForGuild(client, guildId, { clientId: botId, force: true, remove });
                 await reply(remove
-                    ? ['Done. Server-only commands removed.']
-                    : [`Done. ${body.length} slash commands registered for this server.`, 'Press Ctrl+R in Discord, then type / to see them.', `Later, when global commands work, run "${prefix}slashhere off" to avoid duplicates.`]);
+                    ? [
+                        'Done. Server-only commands removed.',
+                        ...(getCommandScope() === 'guild' ? ['Note: the bot is in per-server mode, so they come back the next time it starts.'] : []),
+                    ]
+                    : [
+                        `Done. ${result.count} slash commands registered for this server.`,
+                        'Press Ctrl+R in Discord, then type / to see them.',
+                        ...(getCommandScope() === 'guild'
+                            ? ['The bot also does this by itself on startup and when it joins a server.']
+                            : [`Later, when global commands work, run "${prefix}slashhere off" to avoid duplicates.`]),
+                    ]);
             } catch (error) {
                 logger.warn(`slashhere failed: ${describeError(error)}`);
                 const lines = [`Failed: ${describeError(error)}`];

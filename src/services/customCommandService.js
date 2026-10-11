@@ -7,7 +7,7 @@ import { logger } from '../utils/logger.js';
 export const MAX_CUSTOM_COMMANDS = 50;
 export const MAX_RESPONSE_LENGTH = 1800;
 const NAME_PATTERN = /^[a-z0-9_-]{1,32}$/;
-const RESERVED = new Set(['perms', 'slashcheck', 'slashhere', 'help']);
+const RESERVED = new Set(['perms', 'slashcheck', 'slashhere', 'help', 'status', 'activity', 'presence']);
 
 const CACHE_TTL_MS = 30_000;
 const cache = new Map();

@@ -6,6 +6,7 @@ import { reconcileTicketPanels, reconcileVerificationPanels, reconcileReactionRo
 import { reconcileLevelRoles } from "../services/leveling/levelRoleSyncService.js";
 import { initRiffyAfterReady } from "../services/music/riffySetup.js";
 import { startYouTubeNotifier } from "../services/youtubeNotifierService.js";
+import { applySavedPresence } from "../services/botPresenceService.js";
 
 export default {
   name: Events.ClientReady,
@@ -13,7 +14,7 @@ export default {
 
   async execute(client) {
     try {
-      client.user.setPresence(config.bot.presence);
+      await applySavedPresence(client, config.bot.presence);
 
       startupLog(`Ready! Logged in as ${client.user.tag}`);
       startupLog(`Serving ${client.guilds.cache.size} guild(s)`);

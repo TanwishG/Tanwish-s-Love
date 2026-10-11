@@ -61,3 +61,11 @@ Type `!perms` (Manage Server required) to see the permissions the bot needs, whi
 ## Lock bypass
 
 `/bypass lock channel:<channel> target:<user or role>` lets that person or role keep talking in the channel while it is locked (it adds a "Send Messages" allow override for them, which beats the @everyone lock). `/bypass remove` takes it away again, and `/bypass list [channel]` shows who has it. `/lock` mentions the people who can still speak. Requires Manage Channels; the bot needs View Channel, Send Messages, Manage Channels and Manage Roles in that channel.
+
+## Bot owner: status and activity
+
+Only users listed in `OWNER_IDS` can use these (they are chat commands, so they do not use up a slash command slot). The choice is saved and re-applied every time the bot starts.
+
+- `!status online | idle | dnd | invisible` (`sleep` = idle, `busy` = dnd)
+- `!activity playing|watching|listening|competing|custom <text>` and `!activity clear`
+- `!presence` shows the current setting; `!presence reset` goes back to the default in the config file
